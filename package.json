@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -24,6 +24,11 @@
         "command": "py2rocket.buildAndPush",
         "title": "Py2Rocket: Build and Push",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "py2rocket.push",
+        "title": "Py2Rocket: Push",
+        "icon": "$(send)"
       }
     ],
     "menus": {
@@ -37,6 +42,11 @@
           "command": "py2rocket.buildAndPush",
           "when": "resourceLangId == python",
           "group": "navigation@2"
+        },
+        {
+          "command": "py2rocket.push",
+          "when": "resourceLangId == python",
+          "group": "navigation@3"
         }
       ],
       "editor/context": [
@@ -49,6 +59,11 @@
           "command": "py2rocket.buildAndPush",
           "when": "resourceLangId == python",
           "group": "py2rocket@2"
+        },
+        {
+          "command": "py2rocket.push",
+          "when": "resourceLangId == python",
+          "group": "py2rocket@3"
         }
       ]
     },

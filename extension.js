@@ -8,9 +8,10 @@ const fs = require('fs');
  * @param {string} command - El comando a ejecutar
  * @param {string} filePath - Ruta del archivo activo
  * @param {vscode.OutputChannel} outputChannel - Canal de salida
+ * @param {string} workingDir - Directorio de trabajo (por defecto el directorio del archivo)
  * @returns {Promise<void>}
  */
-function executePy2RocketCommand(command, filePath, outputChannel) {
+function executePy2RocketCommand(command, filePath, outputChannel, workingDir = null) {
     return new Promise((resolve, reject) => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
@@ -26,9 +27,12 @@ function executePy2RocketCommand(command, filePath, outputChannel) {
         outputChannel.appendLine(`Archivo: ${filePath}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
 
+        // Si no se especifica directorio de trabajo, usar el directorio del archivo
+        const cwd = workingDir || path.dirname(filePath);
+
         // Preparar opciones de ejecución
         const execOptions = {
-            cwd: workspaceFolder,
+            cwd: cwd,
             shell: true,
             env: {
                 ...process.env,
@@ -41,7 +45,7 @@ function executePy2RocketCommand(command, filePath, outputChannel) {
             execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
         }
 
-        // Ejecutar el comando en el directorio del workspace
+        // Ejecutar el comando en el directorio especificado
         exec(command, execOptions, (error, stdout, stderr) => {
             if (stdout) {
                 outputChannel.appendLine(stdout);
@@ -168,15 +172,13 @@ async function buildCommand(outputChannel) {
     // Guardar el archivo antes de compilar
     await vscode.window.activeTextEditor.document.save();
 
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const fileName = path.basename(filePath);
     const pythonCommand = getPythonCommand();
-
-    // Usar la ruta relativa del archivo respecto al workspace
-    const relativePath = path.relative(workspaceFolder, filePath);
-    const command = `${pythonCommand} -m py2rocket build "${relativePath}"`;
+    const command = `${pythonCommand} -m py2rocket build "${fileName}"`;
 
     try {
-        await executePy2RocketCommand(command, filePath, outputChannel);
+        // Ejecutar desde el directorio del archivo
+        await executePy2RocketCommand(command, filePath, outputChannel, path.dirname(filePath));
 
         // Intentar abrir el archivo JSON generado
         const jsonPath = filePath.replace('.py', '.json');
@@ -200,27 +202,58 @@ async function buildAndPushCommand(outputChannel) {
     // Guardar el archivo antes de compilar
     await vscode.window.activeTextEditor.document.save();
 
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const fileName = path.basename(filePath);
     const fileNameWithoutExt = path.basename(filePath, '.py');
     const jsonFileName = `${fileNameWithoutExt}.json`;
     const pythonCommand = getPythonCommand();
-
-    // Usar la ruta relativa del archivo respecto al workspace
-    const relativePath = path.relative(workspaceFolder, filePath);
-    const relativeJsonPath = path.relative(workspaceFolder, filePath.replace('.py', '.json'));
+    const fileDir = path.dirname(filePath);
 
     try {
         // Paso 1: Build
         outputChannel.appendLine('Paso 1/2: Building...');
-        const buildCommand = `${pythonCommand} -m py2rocket build "${relativePath}"`;
-        await executePy2RocketCommand(buildCommand, filePath, outputChannel);
+        const buildCommand = `${pythonCommand} -m py2rocket build "${fileName}"`;
+        await executePy2RocketCommand(buildCommand, filePath, outputChannel, fileDir);
 
         // Paso 2: Push
         outputChannel.appendLine('\nPaso 2/2: Pushing to Rocket...');
-        const pushCommand = `${pythonCommand} -m py2rocket push "${relativeJsonPath}"`;
-        await executePy2RocketCommand(pushCommand, filePath, outputChannel);
+        const pushCommand = `${pythonCommand} -m py2rocket push "${jsonFileName}"`;
+        await executePy2RocketCommand(pushCommand, filePath, outputChannel, fileDir);
 
         vscode.window.showInformationMessage(`✓ Build and Push completado: ${fileNameWithoutExt}`);
+    } catch (error) {
+        console.error('Error en build and push:', error);
+    }
+}
+
+/**
+ * Comando: Build and Push Silent
+ * Compila y despliega sin abrir el archivo JSON
+ */
+async function buildAndPushSilentCommand(outputChannel) {
+    const filePath = getActiveFilePath();
+    if (!filePath) return;
+
+    // Guardar el archivo antes de compilar
+    await vscode.window.activeTextEditor.document.save();
+
+    const fileName = path.basename(filePath);
+    const fileNameWithoutExt = path.basename(filePath, '.py');
+    const jsonFileName = `${fileNameWithoutExt}.json`;
+    const pythonCommand = getPythonCommand();
+    const fileDir = path.dirname(filePath);
+
+    try {
+        // Paso 1: Build
+        outputChannel.appendLine('Paso 1/2: Building...');
+        const buildCommand = `${pythonCommand} -m py2rocket build "${fileName}"`;
+        await executePy2RocketCommand(buildCommand, filePath, outputChannel, fileDir);
+
+        // Paso 2: Push
+        outputChannel.appendLine('\nPaso 2/2: Pushing to Rocket...');
+        const pushCommand = `${pythonCommand} -m py2rocket push "${jsonFileName}"`;
+        await executePy2RocketCommand(pushCommand, filePath, outputChannel, fileDir);
+
+        vscode.window.showInformationMessage(`✓ Push completado: ${fileNameWithoutExt}`);
     } catch (error) {
         console.error('Error en build and push:', error);
     }
@@ -279,8 +312,14 @@ function activate(context) {
         buildAndPushCommand(outputChannel);
     });
 
+    // Registrar comando: Push (Build and Push Silent)
+    const pushDisposable = vscode.commands.registerCommand('py2rocket.push', () => {
+        buildAndPushSilentCommand(outputChannel);
+    });
+
     context.subscriptions.push(buildDisposable);
     context.subscriptions.push(buildAndPushDisposable);
+    context.subscriptions.push(pushDisposable);
     context.subscriptions.push(outputChannel);
     context.subscriptions.push(statusBarItem);
 
