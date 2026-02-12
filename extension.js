@@ -311,12 +311,22 @@ async function renderCommand(outputChannel, context) {
                 reject(error);
             } else {
                 try {
-                    // Intentar parsear la salida JSON
-                    const lines = stdout.split('\n').filter(line => line.trim());
-                    const jsonLine = lines.find(line => line.trim().startsWith('{'));
+                    // Intentar parsear la salida JSON (soporta JSON multilínea)
+                    const trimmed = (stdout || '').trim();
+                    let graphData = null;
 
-                    if (jsonLine) {
-                        const graphData = JSON.parse(jsonLine);
+                    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                        graphData = JSON.parse(trimmed);
+                    } else {
+                        const start = trimmed.indexOf('{');
+                        const end = trimmed.lastIndexOf('}');
+                        if (start !== -1 && end !== -1 && end > start) {
+                            const jsonBlock = trimmed.slice(start, end + 1);
+                            graphData = JSON.parse(jsonBlock);
+                        }
+                    }
+
+                    if (graphData) {
                         outputChannel.appendLine(`\n✓ Grafo obtenido exitosamente`);
                         createGraphWebView(graphData, context, fileName);
                         resolve();
