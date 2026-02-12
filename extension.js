@@ -34,30 +34,33 @@ function executePy2RocketCommand(command, filePath, outputChannel) {
                 ...process.env,
                 PYTHONIOENCODING: 'utf-8'
             }
-        if(fs.existsSync(venvPath)) {
-        execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
-    }
+        };
 
-    // Ejecutar el comando en el directorio del workspace
-    exec(command, execOptions, (error, stdout, stderr) => {
-        if (stdout) {
-            outputChannel.appendLine(stdout);
-        }
-        if (stderr) {
-            outputChannel.appendLine(`STDERR: ${stderr}`);
+        const venvPath = path.join(workspaceFolder, '.venv', 'Scripts');
+        if (fs.existsSync(venvPath)) {
+            execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
         }
 
-        if (error) {
-            outputChannel.appendLine(`\nError: ${error.message}`);
-            vscode.window.showErrorMessage(`Error ejecutando py2rocket: ${error.message}`);
-            reject(error);
-        } else {
-            outputChannel.appendLine(`\n✓ Comando completado exitosamente`);
-            vscode.window.showInformationMessage(`✓ ${command} completado`);
-            resolve();
-        }
+        // Ejecutar el comando en el directorio del workspace
+        exec(command, execOptions, (error, stdout, stderr) => {
+            if (stdout) {
+                outputChannel.appendLine(stdout);
+            }
+            if (stderr) {
+                outputChannel.appendLine(`STDERR: ${stderr}`);
+            }
+
+            if (error) {
+                outputChannel.appendLine(`\nError: ${error.message}`);
+                vscode.window.showErrorMessage(`Error ejecutando py2rocket: ${error.message}`);
+                reject(error);
+            } else {
+                outputChannel.appendLine(`\n✓ Comando completado exitosamente`);
+                vscode.window.showInformationMessage(`✓ ${command} completado`);
+                resolve();
+            }
+        });
     });
-});
 }
 
 /**
