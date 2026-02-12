@@ -33,13 +33,15 @@ jobs:
         run: npm install
 
       - name: Package extension
-        run: npx @vscode/vsce package
+        run: |
+          mkdir -p dist
+          npx @vscode/vsce package -o dist/py2rocket-extension.vsix
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: py2rocket-extension-vsix
-          path: "*.vsix"
+          path: "dist/py2rocket-extension.vsix"
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -47,4 +49,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
-          files: "*.vsix"
+          files: "dist/py2rocket-extension.vsix"
