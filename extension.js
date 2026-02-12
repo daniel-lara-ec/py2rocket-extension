@@ -49,6 +49,56 @@ function executePy2RocketCommand(command, filePath, outputChannel) {
 }
 
 /**
+ * Obtiene el comando de Python configurado
+ * @returns {string}
+ */
+function getPythonCommand() {
+    const config = vscode.workspace.getConfiguration('py2rocket');
+    const pythonPath = config.get('pythonPath') || 'python';
+    if (pythonPath && pythonPath !== 'python') {
+        return quoteIfNeeded(pythonPath);
+    }
+
+    const venvPython = findVenvPython();
+    if (venvPython) {
+        return quoteIfNeeded(venvPython);
+    }
+
+    return quoteIfNeeded('python');
+}
+
+/**
+ * Busca un ejecutable de Python en .venv del workspace
+ * @returns {string|null}
+ */
+function findVenvPython() {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceFolder) return null;
+
+    const venvRoot = path.join(workspaceFolder, '.venv');
+    const windowsPython = path.join(venvRoot, 'Scripts', 'python.exe');
+    const unixPython = path.join(venvRoot, 'bin', 'python');
+
+    if (fs.existsSync(windowsPython)) return windowsPython;
+    if (fs.existsSync(unixPython)) return unixPython;
+
+    return null;
+}
+
+/**
+ * Envuelve en comillas si hay espacios
+ * @param {string} value
+ * @returns {string}
+ */
+function quoteIfNeeded(value) {
+    if (!value) return value;
+    if (value.includes(' ') && !value.startsWith('"')) {
+        return `"${value}"`;
+    }
+    return value;
+}
+
+/**
  * Obtiene la ruta del archivo activo
  * @returns {string|null}
  */
@@ -104,7 +154,8 @@ async function buildCommand(outputChannel) {
     await vscode.window.activeTextEditor.document.save();
 
     const fileName = path.basename(filePath);
-    const command = `py2rocket build "${fileName}"`;
+    const pythonCommand = getPythonCommand();
+    const command = `${pythonCommand} -m py2rocket build "${fileName}"`;
 
     try {
         await executePy2RocketCommand(command, filePath, outputChannel);
@@ -134,16 +185,17 @@ async function buildAndPushCommand(outputChannel) {
     const fileName = path.basename(filePath);
     const fileNameWithoutExt = path.basename(filePath, '.py');
     const jsonFileName = `${fileNameWithoutExt}.json`;
+    const pythonCommand = getPythonCommand();
 
     try {
         // Paso 1: Build
         outputChannel.appendLine('Paso 1/2: Building...');
-        const buildCommand = `py2rocket build "${fileName}"`;
+        const buildCommand = `${pythonCommand} -m py2rocket build "${fileName}"`;
         await executePy2RocketCommand(buildCommand, filePath, outputChannel);
 
         // Paso 2: Push
         outputChannel.appendLine('\nPaso 2/2: Pushing to Rocket...');
-        const pushCommand = `py2rocket push "${jsonFileName}"`;
+        const pushCommand = `${pythonCommand} -m py2rocket push "${jsonFileName}"`;
         await executePy2RocketCommand(pushCommand, filePath, outputChannel);
 
         vscode.window.showInformationMessage(`✓ Build and Push completado: ${fileNameWithoutExt}`);

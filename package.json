@@ -51,6 +51,16 @@
           "group": "py2rocket@2"
         }
       ]
+    },
+    "configuration": {
+      "title": "Py2Rocket",
+      "properties": {
+        "py2rocket.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Ruta del ejecutable de Python usado para ejecutar py2rocket (por ejemplo, .venv\\Scripts\\python.exe)"
+        }
+      }
     }
   },
   "scripts": {
