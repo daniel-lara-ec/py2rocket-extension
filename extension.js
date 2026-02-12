@@ -260,6 +260,289 @@ async function buildAndPushSilentCommand(outputChannel) {
 }
 
 /**
+ * Comando: Render
+ * Renderiza el grafo del workflow usando py2rocket render
+ */
+async function renderCommand(outputChannel, context) {
+    const filePath = getActiveFilePath();
+    if (!filePath) return;
+
+    // Guardar el archivo antes de renderizar
+    await vscode.window.activeTextEditor.document.save();
+
+    const fileName = path.basename(filePath);
+    const pythonCommand = getPythonCommand();
+    const fileDir = path.dirname(filePath);
+
+    return new Promise((resolve, reject) => {
+        outputChannel.show(true);
+        outputChannel.appendLine(`\n${'='.repeat(60)}`);
+        outputChannel.appendLine(`Renderizando grafo: ${fileName}`);
+        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+        const command = `${pythonCommand} -m py2rocket render "${fileName}"`;
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        const execOptions = {
+            cwd: fileDir,
+            shell: true,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8'
+            }
+        };
+
+        const venvPath = path.join(workspaceFolder, '.venv', 'Scripts');
+        if (fs.existsSync(venvPath)) {
+            execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
+        }
+
+        exec(command, execOptions, (error, stdout, stderr) => {
+            if (stdout) {
+                outputChannel.appendLine(stdout);
+            }
+            if (stderr && !stderr.includes('DeprecationWarning')) {
+                outputChannel.appendLine(`STDERR: ${stderr}`);
+            }
+
+            if (error) {
+                outputChannel.appendLine(`\nError: ${error.message}`);
+                vscode.window.showErrorMessage(`Error renderizando grafo: ${error.message}`);
+                reject(error);
+            } else {
+                try {
+                    // Intentar parsear la salida JSON
+                    const lines = stdout.split('\n').filter(line => line.trim());
+                    const jsonLine = lines.find(line => line.trim().startsWith('{'));
+
+                    if (jsonLine) {
+                        const graphData = JSON.parse(jsonLine);
+                        outputChannel.appendLine(`\n✓ Grafo obtenido exitosamente`);
+                        createGraphWebView(graphData, context, fileName);
+                        resolve();
+                    } else {
+                        throw new Error('No se encontró JSON en la salida');
+                    }
+                } catch (parseError) {
+                    outputChannel.appendLine(`\nError parseando JSON: ${parseError.message}`);
+                    vscode.window.showErrorMessage(`Error parseando datos del grafo: ${parseError.message}`);
+                    reject(parseError);
+                }
+            }
+        });
+    });
+}
+
+/**
+ * Crea un WebView panel para mostrar el grafo
+ * @param {Object} graphData - Datos del grafo con nodes y edges
+ * @param {vscode.ExtensionContext} context - Contexto de la extensión
+ * @param {string} fileName - Nombre del archivo
+ */
+function createGraphWebView(graphData, context, fileName) {
+    const panel = vscode.window.createWebviewPanel(
+        'py2rocketGraph',
+        `Grafo: ${fileName}`,
+        vscode.ViewColumn.Beside,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true
+        }
+    );
+
+    panel.webview.html = getGraphHtml(graphData, fileName);
+}
+
+/**
+ * Genera el HTML para el WebView del grafo
+ * @param {Object} graphData - Datos del grafo
+ * @param {string} fileName - Nombre del archivo
+ * @returns {string}
+ */
+function getGraphHtml(graphData, fileName) {
+    const nodes = graphData.nodes || [];
+    const edges = graphData.edges || [];
+
+    // Definir colores por tipo de nodo
+    const nodeColors = {
+        'reader': '#4CAF50',
+        'writer': '#F44336',
+        'map': '#2196F3',
+        'filter': '#FF9800',
+        'join': '#9C27B0',
+        'aggregate': '#00BCD4',
+        'transform': '#FFC107',
+        'default': '#757575'
+    };
+
+    // Transformar nodos para vis-network
+    const visNodes = nodes.map(node => ({
+        id: node.id,
+        label: node.id,
+        color: nodeColors[node.type] || nodeColors.default,
+        shape: node.type === 'reader' ? 'box' :
+            node.type === 'writer' ? 'box' :
+                'ellipse',
+        font: { color: '#ffffff', size: 14, bold: true },
+        title: `Tipo: ${node.type}`
+    }));
+
+    // Transformar edges para vis-network
+    const visEdges = edges.map((edge, index) => ({
+        id: index,
+        from: edge.source,
+        to: edge.target,
+        arrows: 'to',
+        color: { color: '#848484', highlight: '#2196F3' },
+        width: 2,
+        smooth: { type: 'cubicBezier' }
+    }));
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grafo: ${fileName}</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+        }
+        #header {
+            padding: 15px;
+            background-color: var(--vscode-editor-background);
+            border-bottom: 1px solid var(--vscode-panel-border);
+        }
+        #header h2 {
+            margin: 0;
+            color: var(--vscode-editor-foreground);
+        }
+        #stats {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+        #mynetwork {
+            width: 100%;
+            height: calc(100vh - 100px);
+            background-color: var(--vscode-editor-background);
+        }
+        .legend {
+            position: absolute;
+            top: 80px;
+            right: 20px;
+            background-color: var(--vscode-sideBar-background);
+            border: 1px solid var(--vscode-panel-border);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+        .legend-item {
+            margin: 5px 0;
+            display: flex;
+            align-items: center;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h2>📊 Grafo del Workflow: ${fileName}</h2>
+        <div id="stats">
+            <span>Nodos: ${nodes.length}</span> | 
+            <span>Conexiones: ${edges.length}</span>
+        </div>
+    </div>
+    
+    <div class="legend">
+        <div style="font-weight: bold; margin-bottom: 8px;">Tipos de Nodo</div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: ${nodeColors.reader}"></div>
+            <span>Reader</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: ${nodeColors.writer}"></div>
+            <span>Writer</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: ${nodeColors.map}"></div>
+            <span>Map</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: ${nodeColors.filter}"></div>
+            <span>Filter</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: ${nodeColors.join}"></div>
+            <span>Join</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: ${nodeColors.aggregate}"></div>
+            <span>Aggregate</span>
+        </div>
+    </div>
+    
+    <div id="mynetwork"></div>
+    
+    <script type="text/javascript">
+        const nodes = new vis.DataSet(${JSON.stringify(visNodes)});
+        const edges = new vis.DataSet(${JSON.stringify(visEdges)});
+        
+        const container = document.getElementById('mynetwork');
+        const data = { nodes: nodes, edges: edges };
+        
+        const options = {
+            layout: {
+                hierarchical: {
+                    direction: 'LR',
+                    sortMethod: 'directed',
+                    levelSeparation: 200,
+                    nodeSpacing: 150
+                }
+            },
+            physics: {
+                enabled: false
+            },
+            edges: {
+                smooth: {
+                    type: 'cubicBezier',
+                    forceDirection: 'horizontal',
+                    roundness: 0.4
+                }
+            },
+            interaction: {
+                hover: true,
+                navigationButtons: true,
+                keyboard: true
+            }
+        };
+        
+        const network = new vis.Network(container, data, options);
+        
+        // Evento de click en nodos
+        network.on('click', function(params) {
+            if (params.nodes.length > 0) {
+                const nodeId = params.nodes[0];
+                const node = nodes.get(nodeId);
+                console.log('Nodo seleccionado:', node);
+            }
+        });
+    </script>
+</body>
+</html>`;
+}
+
+/**
  * Activación de la extensión
  */
 function activate(context) {
@@ -317,9 +600,15 @@ function activate(context) {
         buildAndPushSilentCommand(outputChannel);
     });
 
+    // Registrar comando: Render
+    const renderDisposable = vscode.commands.registerCommand('py2rocket.render', () => {
+        renderCommand(outputChannel, context);
+    });
+
     context.subscriptions.push(buildDisposable);
     context.subscriptions.push(buildAndPushDisposable);
     context.subscriptions.push(pushDisposable);
+    context.subscriptions.push(renderDisposable);
     context.subscriptions.push(outputChannel);
     context.subscriptions.push(statusBarItem);
 
