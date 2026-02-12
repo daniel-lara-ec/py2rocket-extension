@@ -32,16 +32,20 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Get version
+        id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
       - name: Package extension
         run: |
           mkdir -p dist
-          npx @vscode/vsce package -o dist/py2rocket-extension.vsix
+          npx @vscode/vsce package -o dist/py2rocket-extension-${{ steps.version.outputs.VERSION }}.vsix
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: py2rocket-extension-vsix
-          path: "dist/py2rocket-extension.vsix"
+          path: "dist/py2rocket-extension-*.vsix"
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -49,4 +53,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
-          files: "dist/py2rocket-extension.vsix"
+          files: "dist/py2rocket-extension-*.vsix"

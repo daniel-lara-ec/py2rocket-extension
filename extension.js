@@ -26,8 +26,21 @@ function executePy2RocketCommand(command, filePath, outputChannel) {
         outputChannel.appendLine(`Archivo: ${filePath}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
 
+        // Preparar opciones de ejecución
+        const execOptions = {
+            cwd: workspaceFolder,
+            shell: true,
+            env: { ...process.env }
+        };
+
+        // En Windows, agregar el venv al PATH si existe
+        const venvPath = path.join(workspaceFolder, '.venv', 'Scripts');
+        if (fs.existsSync(venvPath)) {
+            execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
+        }
+
         // Ejecutar el comando en el directorio del workspace
-        exec(command, { cwd: workspaceFolder }, (error, stdout, stderr) => {
+        exec(command, execOptions, (error, stdout, stderr) => {
             if (stdout) {
                 outputChannel.appendLine(stdout);
             }
@@ -61,10 +74,10 @@ function getPythonCommand() {
 
     const venvPython = findVenvPython();
     if (venvPython) {
-        return quoteIfNeeded(venvPython);
+        return 'python'; // Usar 'python' directamente si venv está en PATH
     }
 
-    return quoteIfNeeded('python');
+    return 'python';
 }
 
 /**
