@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "author": "Matias Lara",
   "publisher": "matiaslara",
   "engines": {
@@ -41,24 +41,14 @@
     "menus": {
       "editor/title": [
         {
-          "command": "py2rocket.build",
+          "command": "py2rocket.push",
           "when": "resourceLangId == python",
           "group": "navigation@1"
         },
         {
-          "command": "py2rocket.buildAndPush",
-          "when": "resourceLangId == python",
-          "group": "navigation@2"
-        },
-        {
-          "command": "py2rocket.push",
-          "when": "resourceLangId == python",
-          "group": "navigation@3"
-        },
-        {
           "command": "py2rocket.render",
           "when": "resourceLangId == python",
-          "group": "navigation@4"
+          "group": "navigation@2"
         }
       ],
       "editor/context": [
