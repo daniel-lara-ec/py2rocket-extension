@@ -162,6 +162,88 @@ function detectSyncWorkspace() {
 }
 
 /**
+ * Normaliza rutas de grupo usando separador '/'
+ * @param {string} value
+ * @returns {{normalized: string, leadingSlash: boolean}}
+ */
+function normalizeGroupPath(value) {
+    const trimmed = (value || '').trim();
+    const leadingSlash = trimmed.startsWith('/');
+    const normalized = trimmed
+        .replace(/\\/g, '/')
+        .split('/')
+        .filter(Boolean)
+        .join('/');
+    return { normalized, leadingSlash };
+}
+
+/**
+ * Divide ruta de grupo en partes seguras
+ * @param {string} value
+ * @returns {string[]}
+ */
+function splitGroupPath(value) {
+    const { normalized } = normalizeGroupPath(value);
+    if (!normalized) return [];
+    return normalized.split('/');
+}
+
+/**
+ * Valida que no haya segmentos peligrosos
+ * @param {string[]} parts
+ * @returns {boolean}
+ */
+function isSafeGroupParts(parts) {
+    return parts.every(part => part && part !== '.' && part !== '..');
+}
+
+/**
+ * Construye el nombre completo del grupo
+ * @param {string} baseGroupName
+ * @param {string} input
+ * @returns {string}
+ */
+function buildFullGroupName(baseGroupName, input) {
+    const baseInfo = normalizeGroupPath(baseGroupName);
+    const inputInfo = normalizeGroupPath(input);
+
+    if (!inputInfo.normalized) {
+        return baseInfo.leadingSlash ? `/${baseInfo.normalized}` : baseInfo.normalized;
+    }
+
+    let full = inputInfo.normalized;
+    if (baseInfo.normalized && !inputInfo.normalized.startsWith(baseInfo.normalized)) {
+        full = [baseInfo.normalized, inputInfo.normalized].filter(Boolean).join('/');
+    }
+
+    const leadingSlash = baseInfo.leadingSlash || inputInfo.leadingSlash;
+    return leadingSlash ? `/${full}` : full;
+}
+
+/**
+ * Resuelve la carpeta local del grupo completo en el workspace
+ * @param {string} workspaceFolder
+ * @param {string} baseGroupName
+ * @param {string} fullGroupName
+ * @returns {string}
+ */
+function resolveLocalGroupDir(workspaceFolder, baseGroupName, fullGroupName) {
+    const baseParts = splitGroupPath(baseGroupName);
+    const fullParts = splitGroupPath(fullGroupName);
+    let relParts = fullParts;
+
+    if (baseParts.length > 0) {
+        const basePrefix = fullParts.slice(0, baseParts.length).join('/');
+        if (basePrefix === baseParts.join('/')) {
+            relParts = fullParts.slice(baseParts.length);
+        }
+    }
+
+    if (relParts.length === 0) return workspaceFolder;
+    return path.join(workspaceFolder, ...relParts);
+}
+
+/**
  * Comando: Build
  * Compila el archivo Python actual a JSON usando py2rocket build
  */
@@ -341,6 +423,460 @@ async function renderCommand(outputChannel, context) {
             }
         });
     });
+}
+
+/**
+ * Extrae el workflow_id del archivo Python abierto
+ * @param {string} fileContent - Contenido del archivo
+ * @returns {string|null}
+ */
+function extractWorkflowId(fileContent) {
+    // Buscar el patrón workflow_id="..." o workflow_id='...'
+    const match = fileContent.match(/workflow_id\s*=\s*["']([a-f0-9-]+)["']/i);
+    if (match && match[1]) {
+        return match[1];
+    }
+    return null;
+}
+
+/**
+ * Crea un WebView con tabla de historial de ejecuciones
+ * @param {Object} historyData - Datos del historial
+ * @param {vscode.ExtensionContext} context - Contexto de la extensión
+ * @param {string} workflowId - ID del workflow
+ */
+function createHistoryWebView(historyData, context, workflowId) {
+    const panel = vscode.window.createWebviewPanel(
+        'py2rocketHistory',
+        `Historial: ${workflowId.substring(0, 8)}...`,
+        vscode.ViewColumn.Beside,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true
+        }
+    );
+
+    const executions = historyData.executions || [];
+    const totalCount = historyData.total_count || 0;
+
+    // Generar filas de tabla
+    const tableRows = executions.map(exec => {
+        const execId = exec.id || 'N/A';
+        const state = exec.statuses && exec.statuses[0] ? exec.statuses[0].state : 'Unknown';
+        const creationDate = exec.creationDate || 'N/A';
+        const assetName = exec.assetDataExecution ? exec.assetDataExecution.name : 'N/A';
+        const execName = exec.executionNameDescription ? exec.executionNameDescription.name : 'Sin nombre';
+
+        return `
+            <tr>
+                <td>${execId.substring(0, 8)}...</td>
+                <td>${execName}</td>
+                <td><span class="state-${state}">${state}</span></td>
+                <td>${new Date(creationDate).toLocaleString('es-ES')}</td>
+                <td>${assetName}</td>
+            </tr>
+        `;
+    }).join('');
+
+    panel.webview.html = `
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Historial de Ejecuciones</title>
+            <style>
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    margin: 0;
+                    padding: 0;
+                    background-color: var(--vscode-editor-background);
+                    color: var(--vscode-editor-foreground);
+                }
+                
+                #header {
+                    padding: 15px;
+                    background-color: var(--vscode-editor-background);
+                    border-bottom: 1px solid var(--vscode-panel-border);
+                }
+                
+                #header h2 {
+                    margin: 0 0 10px 0;
+                    color: var(--vscode-editor-foreground);
+                }
+                
+                #searchBox {
+                    width: 100%;
+                    max-width: 500px;
+                    padding: 8px 12px;
+                    border: 1px solid var(--vscode-input-border);
+                    background-color: var(--vscode-input-background);
+                    color: var(--vscode-input-foreground);
+                    border-radius: 4px;
+                    font-size: 14px;
+                }
+                
+                #stats {
+                    margin-top: 10px;
+                    font-size: 12px;
+                    color: var(--vscode-descriptionForeground);
+                }
+                
+                #container {
+                    padding: 15px;
+                    overflow: auto;
+                    max-height: calc(100vh - 150px);
+                }
+                
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    background-color: var(--vscode-editor-background);
+                }
+                
+                th {
+                    background-color: var(--vscode-sideBar-background);
+                    padding: 10px;
+                    text-align: left;
+                    border-bottom: 2px solid var(--vscode-panel-border);
+                    font-weight: 600;
+                    color: var(--vscode-editor-foreground);
+                    position: sticky;
+                    top: 0;
+                }
+                
+                td {
+                    padding: 10px;
+                    border-bottom: 1px solid var(--vscode-panel-border);
+                    color: var(--vscode-editor-foreground);
+                }
+                
+                tr:hover {
+                    background-color: var(--vscode-list-hoverBackground);
+                }
+                
+                .state-Completed {
+                    background-color: rgba(76, 175, 80, 0.2);
+                    color: #4CAF50;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    font-weight: 500;
+                }
+                
+                .state-Running {
+                    background-color: rgba(33, 150, 243, 0.2);
+                    color: #2196F3;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    font-weight: 500;
+                }
+                
+                .state-Failed {
+                    background-color: rgba(244, 67, 54, 0.2);
+                    color: #F44336;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    font-weight: 500;
+                }
+                
+                .state-Stopped {
+                    background-color: rgba(255, 152, 0, 0.2);
+                    color: #FF9800;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    font-weight: 500;
+                }
+                
+                .state-Unknown {
+                    background-color: rgba(117, 117, 117, 0.2);
+                    color: #757575;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    font-weight: 500;
+                }
+                
+                .no-results {
+                    text-align: center;
+                    padding: 30px;
+                    color: var(--vscode-descriptionForeground);
+                }
+            </style>
+        </head>
+        <body>
+            <div id="header">
+                <h2>📋 Historial de Ejecuciones</h2>
+                <input type="text" id="searchBox" placeholder="Buscar por nombre, estado, ID...">
+                <div id="stats">
+                    <span>Total de ejecuciones: ${totalCount}</span> | 
+                    <span>Mostrando: ${executions.length}</span>
+                </div>
+            </div>
+            
+            <div id="container">
+                <table id="historyTable">
+                    <thead>
+                        <tr>
+                            <th>ID Ejecución</th>
+                            <th>Nombre</th>
+                            <th>Estado</th>
+                            <th>Fecha de Creación</th>
+                            <th>Asset</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody">
+                        ${tableRows || '<tr><td colspan="5" class="no-results">No hay ejecuciones</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+            
+            <script>
+                const searchBox = document.getElementById('searchBox');
+                const tableBody = document.getElementById('tableBody');
+                const rows = tableBody.querySelectorAll('tr');
+                
+                searchBox.addEventListener('input', (e) => {
+                    const searchTerm = e.target.value.toLowerCase();
+                    
+                    rows.forEach(row => {
+                        const text = row.textContent.toLowerCase();
+                        row.style.display = text.includes(searchTerm) ? '' : 'none';
+                    });
+                });
+            </script>
+        </body>
+        </html>
+    `;
+}
+
+/**
+ * Comando: Get History
+ * Obtiene el historial de ejecuciones del workflow abierto
+ */
+async function getHistoryCommand(outputChannel, context) {
+    const filePath = getActiveFilePath();
+    if (!filePath) return;
+
+    try {
+        // Leer contenido del archivo
+        const fileContent = fs.readFileSync(filePath, 'utf-8');
+        const workflowId = extractWorkflowId(fileContent);
+
+        if (!workflowId) {
+            vscode.window.showErrorMessage('No se encontró workflow_id en el archivo');
+            return;
+        }
+
+        outputChannel.show(true);
+        outputChannel.appendLine(`\n${'='.repeat(60)}`);
+        outputChannel.appendLine(`Obteniendo historial: ${workflowId}`);
+        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+        const pythonCommand = getPythonCommand();
+        const command = `${pythonCommand} -m py2rocket get-history "${workflowId}" -j`;
+
+        // Ejecutar comando sin mostrar mensaje de éxito
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const execOptions = {
+            cwd: path.dirname(filePath),
+            shell: true,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8'
+            }
+        };
+
+        const venvPath = path.join(workspaceFolder, '.venv', 'Scripts');
+        if (fs.existsSync(venvPath)) {
+            execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
+        }
+
+        return new Promise((resolve, reject) => {
+            const { execSync } = require('child_process');
+            try {
+                const output = execSync(command, {
+                    ...execOptions,
+                    encoding: 'utf-8'
+                });
+
+                // Parsear JSON
+                const trimmed = output.trim();
+                let historyData = null;
+
+                if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                    historyData = JSON.parse(trimmed);
+                } else {
+                    const start = trimmed.indexOf('{');
+                    const end = trimmed.lastIndexOf('}');
+                    if (start !== -1 && end !== -1 && end > start) {
+                        const jsonBlock = trimmed.slice(start, end + 1);
+                        historyData = JSON.parse(jsonBlock);
+                    }
+                }
+
+                if (historyData && historyData.status === 'success') {
+                    outputChannel.appendLine(`\n✓ Historial obtenido exitosamente`);
+                    outputChannel.appendLine(`  Total de ejecuciones: ${historyData.total_count}`);
+                    createHistoryWebView(historyData, context, workflowId);
+                    resolve();
+                } else {
+                    throw new Error('Respuesta inválida del comando get-history');
+                }
+            } catch (error) {
+                outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+                vscode.window.showErrorMessage(`Error al obtener historial: ${error.message}`);
+                reject(error);
+            }
+        });
+    } catch (error) {
+        outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+        vscode.window.showErrorMessage(`Error: ${error.message}`);
+    }
+}
+
+/**
+ * Comando: Refresh Folder
+ * Descarga y actualiza los assets de la carpeta actual (grupo)
+ */
+async function refreshFolderCommand(outputChannel) {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceFolder) {
+        vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
+        return;
+    }
+
+    const syncDetection = detectSyncWorkspace();
+    if (!syncDetection.isSynced) {
+        vscode.window.showErrorMessage('Este workspace no está sincronizado (.py2rocket)');
+        return;
+    }
+
+    const syncInfo = syncDetection.metadata?.sync_info || {};
+    const groupId = (syncInfo.group_id || '').trim();
+    const groupName = (syncInfo.group_name || '').trim();
+
+    if (!groupId) {
+        vscode.window.showErrorMessage('No se encontró group_id en .py2rocket');
+        return;
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+        `¿Actualizar carpeta '${groupName}'?\nSe borrará el contenido y se descargarán los assets.`,
+        { modal: true },
+        'Actualizar'
+    );
+
+    if (confirm !== 'Actualizar') return;
+
+    try {
+        outputChannel.show(true);
+        outputChannel.appendLine(`\n${'='.repeat(60)}`);
+        outputChannel.appendLine(`Actualizando carpeta: ${groupName}`);
+        outputChannel.appendLine(`Group ID: ${groupId}`);
+        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+        // Borra todo excepto .py2rocket
+        const excludeFiles = ['.py2rocket'];
+        const files = fs.readdirSync(workspaceFolder);
+
+        for (const file of files) {
+            if (excludeFiles.includes(file)) continue;
+            const filePath = path.join(workspaceFolder, file);
+            const stat = fs.statSync(filePath);
+            if (stat.isDirectory()) {
+                fs.rmSync(filePath, { recursive: true, force: true });
+            } else {
+                fs.unlinkSync(filePath);
+            }
+        }
+        outputChannel.appendLine('✓ Contenido borrado\n');
+
+        // Realiza sync del grupo
+        const pythonCommand = getPythonCommand();
+        const syncCommand = `${pythonCommand} -m py2rocket sync "${groupName}" --output "."`;
+
+        await executePy2RocketCommand(syncCommand, workspaceFolder, outputChannel, workspaceFolder);
+        vscode.window.showInformationMessage(`✓ Carpeta actualizada: ${groupName}`);
+    } catch (error) {
+        outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+        vscode.window.showErrorMessage(`Error al actualizar: ${error.message}`);
+    }
+}
+
+/**
+ * Comando: Create Group
+ * Crea un grupo en Rocket y la carpeta local correspondiente
+ */
+async function createGroupCommand(outputChannel) {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceFolder) {
+        vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
+        return;
+    }
+
+    const syncDetection = detectSyncWorkspace();
+    if (!syncDetection.isSynced) {
+        vscode.window.showErrorMessage('Este workspace no está sincronizado (.py2rocket)');
+        return;
+    }
+
+    const syncInfo = syncDetection.metadata?.sync_info || {};
+    const baseGroupName = (syncInfo.group_name || '').trim();
+    if (!baseGroupName) {
+        vscode.window.showErrorMessage('No se encontró group_name en .py2rocket');
+        return;
+    }
+
+    const groupInput = await vscode.window.showInputBox({
+        prompt: 'Nombre del nuevo grupo (ruta relativa) ',
+        placeHolder: 'subgrupo/nuevo',
+        ignoreFocusOut: true
+    });
+
+    if (!groupInput) return;
+
+    const inputParts = splitGroupPath(groupInput);
+    if (!isSafeGroupParts(inputParts)) {
+        vscode.window.showErrorMessage('El nombre del grupo contiene segmentos invalidos');
+        return;
+    }
+
+    const fullGroupName = buildFullGroupName(baseGroupName, groupInput);
+    const fullParts = splitGroupPath(fullGroupName);
+    if (!isSafeGroupParts(fullParts)) {
+        vscode.window.showErrorMessage('El nombre del grupo resultante es invalido');
+        return;
+    }
+
+    let projectName = (syncInfo.project_name || '').trim();
+    if (!projectName) {
+        projectName = await vscode.window.showInputBox({
+            prompt: 'Nombre del proyecto (PROJECT_NAME)',
+            placeHolder: 'MiProyecto',
+            ignoreFocusOut: true
+        });
+        if (!projectName) return;
+    }
+
+    const localGroupDir = resolveLocalGroupDir(workspaceFolder, baseGroupName, fullGroupName);
+
+    const confirm = await vscode.window.showInformationMessage(
+        `Crear grupo '${fullGroupName}' y carpeta local en '${localGroupDir}'?`,
+        { modal: true },
+        'Crear'
+    );
+
+    if (confirm !== 'Crear') return;
+
+    const pythonCommand = getPythonCommand();
+    const createCommand = `${pythonCommand} -m py2rocket create-group "${fullGroupName}" --project-name "${projectName}"`;
+
+    try {
+        await executePy2RocketCommand(createCommand, path.join(workspaceFolder, '.py2rocket'), outputChannel, workspaceFolder);
+        fs.mkdirSync(localGroupDir, { recursive: true });
+        vscode.window.showInformationMessage(`✓ Carpeta creada: ${localGroupDir}`);
+    } catch (error) {
+        console.error('Error en create-group:', error);
+    }
 }
 
 /**
@@ -615,10 +1151,28 @@ function activate(context) {
         renderCommand(outputChannel, context);
     });
 
+    // Registrar comando: Get History
+    const getHistoryDisposable = vscode.commands.registerCommand('py2rocket.getHistory', () => {
+        getHistoryCommand(outputChannel, context);
+    });
+
+    // Registrar comando: Refresh Folder
+    const refreshFolderDisposable = vscode.commands.registerCommand('py2rocket.refreshFolder', () => {
+        refreshFolderCommand(outputChannel);
+    });
+
+    // Registrar comando: Create Group
+    const createGroupDisposable = vscode.commands.registerCommand('py2rocket.createGroup', () => {
+        createGroupCommand(outputChannel);
+    });
+
     context.subscriptions.push(buildDisposable);
     context.subscriptions.push(buildAndPushDisposable);
     context.subscriptions.push(pushDisposable);
     context.subscriptions.push(renderDisposable);
+    context.subscriptions.push(getHistoryDisposable);
+    context.subscriptions.push(refreshFolderDisposable);
+    context.subscriptions.push(createGroupDisposable);
     context.subscriptions.push(outputChannel);
     context.subscriptions.push(statusBarItem);
 

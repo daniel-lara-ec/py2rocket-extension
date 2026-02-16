@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "author": "Matias Lara",
   "publisher": "matiaslara",
   "engines": {
@@ -36,6 +36,21 @@
         "command": "py2rocket.render",
         "title": "Py2Rocket: Render Graph",
         "icon": "$(graph)"
+      },
+      {
+        "command": "py2rocket.getHistory",
+        "title": "Py2Rocket: Get History",
+        "icon": "$(history)"
+      },
+      {
+        "command": "py2rocket.refreshFolder",
+        "title": "Py2Rocket: Refresh Folder",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "py2rocket.createGroup",
+        "title": "Py2Rocket: Create Group",
+        "icon": "$(folder-new)"
       }
     ],
     "menus": {
@@ -59,6 +74,11 @@
           "command": "py2rocket.render",
           "when": "resourceLangId == python",
           "group": "navigation@4"
+        },
+        {
+          "command": "py2rocket.getHistory",
+          "when": "resourceLangId == python",
+          "group": "navigation@5"
         }
       ],
       "editor/context": [
@@ -81,6 +101,23 @@
           "command": "py2rocket.render",
           "when": "resourceLangId == python",
           "group": "py2rocket@4"
+        },
+        {
+          "command": "py2rocket.getHistory",
+          "when": "resourceLangId == python",
+          "group": "py2rocket@5"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "py2rocket.refreshFolder",
+          "when": "py2rocket.isSynced",
+          "group": "py2rocket@1"
+        },
+        {
+          "command": "py2rocket.createGroup",
+          "when": "py2rocket.isSynced",
+          "group": "py2rocket@2"
         }
       ]
     },
