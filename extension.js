@@ -440,6 +440,306 @@ function extractWorkflowId(fileContent) {
 }
 
 /**
+ * Crea un WebView con formulario para solicitar ejecución del workflow
+ * @param {string} workflowId - ID del workflow
+ * @param {vscode.ExtensionContext} context - Contexto de la extensión
+ * @param {Object} executionConfig - Configuración de ejecutables disponibles
+ */
+function createExecutionWebView(workflowId, context, executionConfig = {}) {
+    const panel = vscode.window.createWebviewPanel(
+        'py2rocketExecution',
+        `Ejecutar: ${workflowId.substring(0, 8)}...`,
+        vscode.ViewColumn.Beside,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true
+        }
+    );
+
+    const environments = executionConfig.environments || ['Default'];
+    const sparkConfigurations = executionConfig.sparkConfigurations || ['Default'];
+    const sparkResources = executionConfig.sparkResources || ['Default'];
+    const userParams = executionConfig.userParams || {};
+    const priorities = ['Normal', 'High', 'Low'];
+
+    // Generar HTML de campos personalizados
+    const paramsFieldsHtml = Object.entries(userParams).map(([name, defaultValue]) => `
+        <div class="form-group">
+            <label for="param_${name}">${name}</label>
+            <input type="text" id="param_${name}" name="${name}" value="${defaultValue || ''}" />
+        </div>
+    `).join('');
+
+    panel.webview.html = `
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Solicitar Ejecución</title>
+            <style>
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    background-color: var(--vscode-editor-background);
+                    color: var(--vscode-editor-foreground);
+                }
+                
+                .container {
+                    max-width: 600px;
+                    margin: 0 auto;
+                }
+                
+                h2 {
+                    color: var(--vscode-editor-foreground);
+                    margin-top: 0;
+                    border-bottom: 2px solid var(--vscode-panel-border);
+                    padding-bottom: 10px;
+                }
+                
+                .section {
+                    margin-bottom: 25px;
+                    padding: 15px;
+                    background-color: var(--vscode-sideBar-background);
+                    border-radius: 4px;
+                    border-left: 3px solid var(--vscode-focusBorder);
+                }
+                
+                .section-title {
+                    font-weight: 600;
+                    color: var(--vscode-editor-foreground);
+                    margin: 0 0 15px 0;
+                    font-size: 14px;
+                    text-transform: uppercase;
+                    opacity: 0.8;
+                }
+                
+                .form-group {
+                    margin-bottom: 12px;
+                    display: flex;
+                    flex-direction: column;
+                }
+                
+                label {
+                    margin-bottom: 5px;
+                    font-weight: 500;
+                    color: var(--vscode-editor-foreground);
+                    font-size: 13px;
+                }
+                
+                input[type="text"],
+                input[type="number"],
+                select {
+                    padding: 8px 10px;
+                    border: 1px solid var(--vscode-input-border);
+                    background-color: var(--vscode-input-background);
+                    color: var(--vscode-input-foreground);
+                    border-radius: 3px;
+                    font-size: 13px;
+                    font-family: inherit;
+                }
+                
+                input[type="text"]:focus,
+                input[type="number"]:focus,
+                select:focus {
+                    outline: none;
+                    border-color: var(--vscode-focusBorder);
+                    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+                }
+                
+                .button-group {
+                    display: flex;
+                    gap: 10px;
+                    margin-top: 30px;
+                    padding-top: 20px;
+                    border-top: 1px solid var(--vscode-panel-border);
+                }
+                
+                button {
+                    flex: 1;
+                    padding: 10px 20px;
+                    border: none;
+                    border-radius: 3px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+                
+                .btn-submit {
+                    background-color: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                }
+                
+                .btn-submit:hover {
+                    background-color: var(--vscode-button-hoverBackground);
+                }
+                
+                .btn-cancel {
+                    background-color: var(--vscode-button-secondaryBackground);
+                    color: var(--vscode-button-secondaryForeground);
+                }
+                
+                .btn-cancel:hover {
+                    background-color: var(--vscode-button-secondaryHoverBackground);
+                }
+                
+                .checkbox-group {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 12px;
+                }
+                
+                input[type="checkbox"] {
+                    margin-right: 8px;
+                    cursor: pointer;
+                    width: 16px;
+                    height: 16px;
+                }
+                
+                .info-text {
+                    font-size: 12px;
+                    color: var(--vscode-descriptionForeground);
+                    margin-top: 5px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h2>▶️ Solicitar Ejecución del Workflow</h2>
+                
+                <form id="executionForm">
+                    <!-- Execution Contexts -->
+                    <div class="section">
+                        <div class="section-title">Contextos de Ejecución</div>
+                        
+                        <div class="form-group">
+                            <label for="environment">Environment</label>
+                            <select id="environment" name="environment">
+                                ${environments.map(env => `<option value="${env}">${env}</option>`).join('')}
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="sparkConfig">SparkConfigurations</label>
+                            <select id="sparkConfig" name="sparkConfig">
+                                ${sparkConfigurations.map(config => `<option value="${config}">${config}</option>`).join('')}
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="sparkResources">SparkResources</label>
+                            <select id="sparkResources" name="sparkResources">
+                                ${sparkResources.map(res => `<option value="${res}">${res}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <!-- User Parameters -->
+                    ${Object.keys(userParams).length > 0 ? `
+                    <div class="section">
+                        <div class="section-title">Parámetros Personalizados</div>
+                        ${paramsFieldsHtml}
+                    </div>
+                    ` : ''}
+                    
+                    <!-- Execution Priority -->
+                    <div class="section">
+                        <div class="form-group">
+                            <label for="priority">Execution Priority</label>
+                            <select id="priority" name="priority">
+                                ${priorities.map(p => `<option value="${p}">${p}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <!-- Tryouts -->
+                    <div class="section">
+                        <div class="form-group">
+                            <label for="tryouts">Reintentos si falla</label>
+                            <input type="number" id="tryouts" name="tryouts" value="0" min="0" max="10" />
+                        </div>
+                        
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="retryUnsuccessful" name="retryUnsuccessful" />
+                            <label for="retryUnsuccessful" style="margin-bottom: 0;">Solo reintentar escrituras fallidas</label>
+                        </div>
+                    </div>
+                    
+                    <!-- Governance -->
+                    <div class="section">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="extendedAudit" name="extendedAudit" />
+                            <label for="extendedAudit" style="margin-bottom: 0;">Información de auditoría extendida</label>
+                        </div>
+                    </div>
+                    
+                    <!-- Buttons -->
+                    <div class="button-group">
+                        <button type="button" class="btn-cancel" onclick="cancelExecution()">Cancelar</button>
+                        <button type="button" class="btn-submit" onclick="submitExecution()">Ejecutar Workflow</button>
+                    </div>
+                </form>
+            </div>
+            
+            <script>
+                const vscode = acquireVsCodeApi();
+                
+                function submitExecution() {
+                    const form = document.getElementById('executionForm');
+                    const formData = new FormData(form);
+                    
+                    const executionData = {
+                        environment: formData.get('environment'),
+                        sparkConfig: formData.get('sparkConfig'),
+                        sparkResources: formData.get('sparkResources'),
+                        priority: formData.get('priority'),
+                        tryouts: parseInt(formData.get('tryouts')) || 0,
+                        retryUnsuccessful: formData.get('retryUnsuccessful') === 'on',
+                        extendedAudit: formData.get('extendedAudit') === 'on',
+                        userParams: {}
+                    };
+                    
+                    // Recolectar parámetros personalizados
+                    document.querySelectorAll('input[name^="param_"]').forEach(input => {
+                        const paramName = input.name.replace('param_', '');
+                        executionData.userParams[paramName] = input.value;
+                    });
+                    
+                    vscode.postMessage({
+                        command: 'executeWorkflow',
+                        data: executionData
+                    });
+                }
+                
+                function cancelExecution() {
+                    vscode.postMessage({
+                        command: 'cancelExecution'
+                    });
+                }
+            </script>
+        </body>
+        </html>
+    `;
+
+    // Manejar mensajes desde el WebView
+    panel.webview.onDidReceiveMessage(
+        message => {
+            if (message.command === 'executeWorkflow') {
+                vscode.window.showInformationMessage(
+                    `Ejecutando workflow con configuración: ${JSON.stringify(message.data)}`
+                );
+                // Aquí se llamaría al comando de ejecución real
+            } else if (message.command === 'cancelExecution') {
+                panel.dispose();
+            }
+        },
+        undefined
+    );
+}
+
+/**
  * Crea un WebView con tabla de historial de ejecuciones
  * @param {Object} historyData - Datos del historial
  * @param {vscode.ExtensionContext} context - Contexto de la extensión
@@ -763,54 +1063,113 @@ async function getHistoryCommand(outputChannel, context) {
 }
 
 /**
- * Comando: Refresh Folder
- * Descarga y actualiza los assets de la carpeta actual (grupo)
+ * Comando: Request Execution
+ * Abre un formulario para solicitar la ejecución de un workflow
  */
-async function refreshFolderCommand(outputChannel) {
+async function requestExecutionCommand(outputChannel, context) {
+    const filePath = getActiveFilePath();
+    if (!filePath) return;
+
+    try {
+        // Leer contenido del archivo
+        const fileContent = fs.readFileSync(filePath, 'utf-8');
+        const workflowId = extractWorkflowId(fileContent);
+
+        if (!workflowId) {
+            vscode.window.showErrorMessage('No se encontró workflow_id en el archivo');
+            return;
+        }
+
+        // Por ahora, crear WebView con configuración por defecto
+        // En el futuro, se puede obtener de py2rocket get-execution-parameters
+        const executionConfig = {
+            environments: ['Default', 'Development', 'Production'],
+            sparkConfigurations: ['Default', 'HighMemory', 'HighPerformance'],
+            sparkResources: ['Default', 'Small', 'Medium', 'Large'],
+            userParams: {
+                'P': 'a'  // Parámetros personalizados del workflow
+            }
+        };
+
+        createExecutionWebView(workflowId, context, executionConfig);
+        outputChannel.appendLine(`\n${'='.repeat(60)}`);
+        outputChannel.appendLine(`Formulario de ejecución abierto para: ${workflowId}`);
+        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+    } catch (error) {
+        outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+        vscode.window.showErrorMessage(`Error: ${error.message}`);
+    }
+}
+
+/**
+ * Comando: Refresh Folder
+ * Descarga y actualiza los assets de una carpeta específica seleccionada en el explorador
+ * Lee la configuración de .py2rocket de la raíz del workspace
+ * @param {vscode.Uri} folderUri - URI de la carpeta seleccionada en el explorador
+ */
+async function refreshFolderCommand(folderUri, outputChannel) {
+    if (!folderUri || !folderUri.fsPath) {
+        vscode.window.showErrorMessage('No se especificó una carpeta para actualizar');
+        return;
+    }
+
+    const selectedFolder = folderUri.fsPath;
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
     if (!workspaceFolder) {
         vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
         return;
     }
 
-    const syncDetection = detectSyncWorkspace();
-    if (!syncDetection.isSynced) {
-        vscode.window.showErrorMessage('Este workspace no está sincronizado (.py2rocket)');
+    // Validar que exista archivo .py2rocket en la raíz del workspace
+    const py2rocketFile = path.join(workspaceFolder, '.py2rocket');
+    if (!fs.existsSync(py2rocketFile)) {
+        vscode.window.showErrorMessage('Este workspace no está sincronizado (.py2rocket no encontrado en la raíz)');
         return;
     }
-
-    const syncInfo = syncDetection.metadata?.sync_info || {};
-    const groupId = (syncInfo.group_id || '').trim();
-    const groupName = (syncInfo.group_name || '').trim();
-
-    if (!groupId) {
-        vscode.window.showErrorMessage('No se encontró group_id en .py2rocket');
-        return;
-    }
-
-    const confirm = await vscode.window.showWarningMessage(
-        `¿Actualizar carpeta '${groupName}'?\nSe borrará el contenido y se descargarán los assets.`,
-        { modal: true },
-        'Actualizar'
-    );
-
-    if (confirm !== 'Actualizar') return;
 
     try {
+        const metadataContent = fs.readFileSync(py2rocketFile, 'utf-8');
+        const metadata = JSON.parse(metadataContent);
+        const syncInfo = metadata.sync_info || {};
+        const groupId = (syncInfo.group_id || '').trim();
+        const groupName = (syncInfo.group_name || '').trim();
+
+        if (!groupId) {
+            vscode.window.showErrorMessage('No se encontró group_id en .py2rocket');
+            return;
+        }
+
+        // Obtener nombre relativo de la carpeta seleccionada
+        const relativePath = path.relative(workspaceFolder, selectedFolder);
+        const folderDisplayName = path.basename(selectedFolder);
+
+        const confirm = await vscode.window.showWarningMessage(
+            `¿Actualizar carpeta '${folderDisplayName}'?\nSe borrará el contenido y se descargarán los assets.`,
+            { modal: true },
+            'Actualizar'
+        );
+
+        if (confirm !== 'Actualizar') return;
+
         outputChannel.show(true);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
-        outputChannel.appendLine(`Actualizando carpeta: ${groupName}`);
+        outputChannel.appendLine(`Actualizando carpeta: ${folderDisplayName}`);
+        outputChannel.appendLine(`Ruta relativa: ${relativePath}`);
+        outputChannel.appendLine(`Ruta completa: ${selectedFolder}`);
         outputChannel.appendLine(`Group ID: ${groupId}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
 
-        // Borra contenido excepto .py2rocket
-        const excludeFiles = ['.py2rocket'];
-        const files = fs.readdirSync(workspaceFolder);
+        // Borra contenido excepto .py2rocket (si existe en esta carpeta)
+        const py2rocketInFolder = path.join(selectedFolder, '.py2rocket');
+        const excludeFiles = fs.existsSync(py2rocketInFolder) ? ['.py2rocket'] : [];
+        const files = fs.readdirSync(selectedFolder);
 
         let deleteErrors = [];
         for (const file of files) {
             if (excludeFiles.includes(file)) continue;
-            const filePath = path.join(workspaceFolder, file);
+            const filePath = path.join(selectedFolder, file);
             try {
                 const stat = fs.statSync(filePath);
                 if (stat.isDirectory()) {
@@ -831,12 +1190,12 @@ async function refreshFolderCommand(outputChannel) {
             outputChannel.appendLine('✓ Contenido borrado\n');
         }
 
-        // Realiza sync del grupo
+        // Realiza sync del grupo en la carpeta seleccionada
         const pythonCommand = getPythonCommand();
         const syncCommand = `${pythonCommand} -m py2rocket sync "${groupName}" --output "."`;
 
-        await executePy2RocketCommand(syncCommand, workspaceFolder, outputChannel, workspaceFolder);
-        vscode.window.showInformationMessage(`✓ Carpeta actualizada: ${groupName}`);
+        await executePy2RocketCommand(syncCommand, selectedFolder, outputChannel, selectedFolder);
+        vscode.window.showInformationMessage(`✓ Carpeta '${folderDisplayName}' actualizada`);
     } catch (error) {
         outputChannel.appendLine(`\n❌ Error: ${error.message}`);
         vscode.window.showErrorMessage(`Error al actualizar: ${error.message}`);
@@ -1197,9 +1556,14 @@ function activate(context) {
         getHistoryCommand(outputChannel, context);
     });
 
+    // Registrar comando: Request Execution
+    const requestExecutionDisposable = vscode.commands.registerCommand('py2rocket.requestExecution', () => {
+        requestExecutionCommand(outputChannel, context);
+    });
+
     // Registrar comando: Refresh Folder
-    const refreshFolderDisposable = vscode.commands.registerCommand('py2rocket.refreshFolder', () => {
-        refreshFolderCommand(outputChannel);
+    const refreshFolderDisposable = vscode.commands.registerCommand('py2rocket.refreshFolder', (folderUri) => {
+        refreshFolderCommand(folderUri, outputChannel);
     });
 
     // Registrar comando: Create Group
@@ -1212,6 +1576,7 @@ function activate(context) {
     context.subscriptions.push(pushDisposable);
     context.subscriptions.push(renderDisposable);
     context.subscriptions.push(getHistoryDisposable);
+    context.subscriptions.push(requestExecutionDisposable);
     context.subscriptions.push(refreshFolderDisposable);
     context.subscriptions.push(createGroupDisposable);
     context.subscriptions.push(outputChannel);
