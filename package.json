@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "author": "Matias Lara",
   "publisher": "matiaslara",
   "engines": {
@@ -12,7 +12,14 @@
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:python"
+    "onLanguage:python",
+    "onCommand:py2rocket.build",
+    "onCommand:py2rocket.download",
+    "onCommand:py2rocket.buildAndPush",
+    "onCommand:py2rocket.push",
+    "onCommand:py2rocket.render",
+    "onCommand:py2rocket.getHistory",
+    "onCommand:py2rocket.requestExecution"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -21,6 +28,11 @@
         "command": "py2rocket.build",
         "title": "Py2Rocket: Build",
         "icon": "$(tools)"
+      },
+      {
+        "command": "py2rocket.download",
+        "title": "Py2Rocket: Download",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "py2rocket.buildAndPush",
@@ -61,35 +73,69 @@
     "menus": {
       "editor/title": [
         {
+          "command": "py2rocket.download",
+          "when": "resourceLangId == python",
+          "group": "navigation@1"
+        },
+        {
+          "command": "py2rocket.buildAndPush",
+          "when": "resourceLangId == python",
+          "group": "navigation@2"
+        },
+        {
+          "command": "py2rocket.push",
+          "when": "resourceLangId == python",
+          "group": "navigation@2"
+        },
+        {
+          "command": "py2rocket.render",
+          "when": "resourceLangId == python",
+          "group": "navigation@2"
+        },
+        {
+          "command": "py2rocket.getHistory",
+          "when": "resourceLangId == python",
+          "group": "navigation@2"
+        },
+        {
           "command": "py2rocket.requestExecution",
-          "when": "editorLangId == python",
+          "when": "resourceLangId == python",
+          "group": "navigation@3"
+        },
+        {
+          "command": "py2rocket.build",
+          "when": "resourceLangId == python",
           "group": "navigation@1"
         }
       ],
       "editor/context": [
         {
           "command": "py2rocket.build",
-          "when": "editorLangId == python"
+          "when": "resourceLangId == python"
+        },
+        {
+          "command": "py2rocket.download",
+          "when": "resourceLangId == python"
         },
         {
           "command": "py2rocket.buildAndPush",
-          "when": "editorLangId == python"
+          "when": "resourceLangId == python"
         },
         {
           "command": "py2rocket.push",
-          "when": "editorLangId == python"
+          "when": "resourceLangId == python"
         },
         {
           "command": "py2rocket.render",
-          "when": "editorLangId == python"
+          "when": "resourceLangId == python"
         },
         {
           "command": "py2rocket.getHistory",
-          "when": "editorLangId == python"
+          "when": "resourceLangId == python"
         },
         {
           "command": "py2rocket.requestExecution",
-          "when": "editorLangId == python"
+          "when": "resourceLangId == python"
         }
       ],
       "explorer/context": [

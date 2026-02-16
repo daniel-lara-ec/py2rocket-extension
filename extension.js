@@ -274,6 +274,115 @@ async function buildCommand(outputChannel) {
 }
 
 /**
+ * Comando: Download
+ * Descarga el workflow desde el servidor y lo convierte a Python
+ */
+async function downloadCommand(outputChannel) {
+    const filePath = getActiveFilePath();
+    if (!filePath) return;
+
+    try {
+        const fileContent = fs.readFileSync(filePath, 'utf-8');
+        const workflowId = extractWorkflowId(fileContent);
+
+        if (!workflowId) {
+            vscode.window.showErrorMessage('No se encontró workflow_id en el archivo');
+            return;
+        }
+
+        const fileName = path.basename(filePath);
+        const fileNameWithoutExt = path.basename(filePath, '.py');
+        const fileDir = path.dirname(filePath);
+        const pythonCommand = getPythonCommand();
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        outputChannel.show(true);
+        outputChannel.appendLine(`\n${'='.repeat(60)}`);
+        outputChannel.appendLine(`Descargando workflow: ${workflowId}`);
+        outputChannel.appendLine(`Archivo: ${fileName}`);
+        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+        const execOptions = {
+            cwd: fileDir,
+            shell: true,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8'
+            }
+        };
+
+        const venvPath = path.join(workspaceFolder, '.venv', 'Scripts');
+        if (fs.existsSync(venvPath)) {
+            execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
+        }
+
+        const { execSync } = require('child_process');
+
+        try {
+            // Paso 1: Descargar el workflow
+            outputChannel.appendLine('Paso 1/3: Descargando del servidor...');
+            const downloadCmd = `${pythonCommand} -m py2rocket download "${workflowId}"`;
+            const downloadOutput = execSync(downloadCmd, {
+                ...execOptions,
+                encoding: 'utf-8'
+            });
+            outputChannel.appendLine(downloadOutput);
+
+            // Paso 2: Detectar el archivo JSON descargado
+            const jsonFiles = fs.readdirSync(fileDir).filter(f =>
+                f.endsWith('.json')
+            );
+
+            if (jsonFiles.length === 0) {
+                throw new Error('No se encontró ningún archivo JSON descargado. Verifica que el download se completó sin errores.');
+            }
+
+            // Si hay múltiples JSON, tomar el más reciente (el que acaba de descargarse)
+            let downloadedJsonFile = jsonFiles[0];
+            if (jsonFiles.length > 1) {
+                const fileStats = jsonFiles.map(f => ({
+                    file: f,
+                    time: fs.statSync(path.join(fileDir, f)).mtime.getTime()
+                }));
+                downloadedJsonFile = fileStats.sort((a, b) => b.time - a.time)[0].file;
+            }
+            outputChannel.appendLine(`\nPaso 2/3: Convirtiendo JSON a Python...`);
+
+            // Paso 3: Convertir JSON a Python usando from-json
+            const fromJsonCmd = `${pythonCommand} -m py2rocket from-json "${downloadedJsonFile}" -o "${fileName}"`;
+            const fromJsonOutput = execSync(fromJsonCmd, {
+                ...execOptions,
+                encoding: 'utf-8'
+            });
+            outputChannel.appendLine(fromJsonOutput);
+
+            // Paso 4: Eliminar el archivo JSON descargado
+            outputChannel.appendLine(`\nPaso 3/3: Limpiando archivos temporales...`);
+            const jsonPath = path.join(fileDir, downloadedJsonFile);
+            fs.unlinkSync(jsonPath);
+            outputChannel.appendLine(`✓ Archivo JSON eliminado: ${downloadedJsonFile}`);
+
+            outputChannel.appendLine(`\n${'='.repeat(60)}`);
+            outputChannel.appendLine(`✓ Workflow descargado y convertido exitosamente`);
+            outputChannel.appendLine(`✓ Archivo: ${fileName}`);
+            outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+            vscode.window.showInformationMessage(`✓ Workflow descargado y convertido a Python`);
+
+            // Recargar el archivo para mostrar los cambios
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+
+        } catch (error) {
+            outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+            vscode.window.showErrorMessage(`Error al descargar workflow: ${error.message}`);
+        }
+    } catch (error) {
+        outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+        vscode.window.showErrorMessage(`Error: ${error.message}`);
+    }
+}
+
+/**
  * Comando: Build and Push
  * Compila el archivo Python y lo despliega a Rocket
  */
@@ -784,7 +893,7 @@ function createHistoryWebView(historyData, context, workflowId) {
         const params = assetData.parametersUsed || {};
 
         // Crear string de parámetros resumido
-        const paramKeys = Object.keys(params);
+        const paramKeys = Object.keys(params).filter((key) => !key.startsWith('SparkConfigurations') && !key.startsWith('Environment') && !key.startsWith('SparkResources'));
         const paramsStr = paramKeys.length > 0
             ? paramKeys.slice(0, 3).join(', ') + (paramKeys.length > 3 ? '...' : '')
             : 'Sin parámetros';
@@ -1269,10 +1378,51 @@ async function refreshFolderCommand(folderUri, outputChannel) {
         }
 
         // Realiza sync del grupo en la carpeta seleccionada
+        // Mapear la carpeta local seleccionada al grupo completo en Rocket
+        const relativePathParts = relativePath.split(path.sep).filter(p => p);
+        const groupNameParts = splitGroupPath(groupName);
+
+        // Encontrar dónde empieza el subgrupo comparando las últimas partes
+        let subgroupParts = [];
+        if (groupNameParts.length > 0) {
+            const lastGroupPart = groupNameParts[groupNameParts.length - 1];
+            const indexOfGroupPart = relativePathParts.indexOf(lastGroupPart);
+            if (indexOfGroupPart >= 0) {
+                // Las partes después de la carpeta del grupo son el subgrupo
+                subgroupParts = relativePathParts.slice(indexOfGroupPart + 1);
+            }
+        }
+
+        // Construir el grupo completo
+        let fullGroupPath = groupName;
+        if (subgroupParts.length > 0) {
+            fullGroupPath = fullGroupPath + '/' + subgroupParts.join('/');
+        }
+
         const pythonCommand = getPythonCommand();
-        const syncCommand = `${pythonCommand} -m py2rocket sync "${groupName}" --output "."`;
+        const syncCommand = `${pythonCommand} -m py2rocket sync "${fullGroupPath}" --output "."`;
 
         await executePy2RocketCommand(syncCommand, selectedFolder, outputChannel, selectedFolder);
+
+        // Si py2rocket creó una subcarpeta con el nombre del grupo, mover su contenido hacia arriba
+        const lastGroupPart = fullGroupPath.split('/').filter(p => p).pop();
+        const createdSubfolder = path.join(selectedFolder, lastGroupPart);
+        if (lastGroupPart && fs.existsSync(createdSubfolder) && createdSubfolder !== selectedFolder) {
+            try {
+                const subfolderFiles = fs.readdirSync(createdSubfolder);
+                for (const file of subfolderFiles) {
+                    const fromPath = path.join(createdSubfolder, file);
+                    const toPath = path.join(selectedFolder, file);
+                    fs.renameSync(fromPath, toPath);
+                }
+                // Eliminar la subcarpeta vacía
+                fs.rmdirSync(createdSubfolder);
+                outputChannel.appendLine('✓ Estructura de carpetas reorganizada\n');
+            } catch (err) {
+                outputChannel.appendLine(`⚠️  No se pudo reorganizar carpetas: ${err.message}\n`);
+            }
+        }
+
         vscode.window.showInformationMessage(`✓ Carpeta '${folderDisplayName}' actualizada`);
     } catch (error) {
         outputChannel.appendLine(`\n❌ Error: ${error.message}`);
@@ -1284,7 +1434,7 @@ async function refreshFolderCommand(folderUri, outputChannel) {
  * Comando: Create Group
  * Crea un grupo en Rocket y la carpeta local correspondiente
  */
-async function createGroupCommand(outputChannel) {
+async function createGroupCommand(folderUri, outputChannel) {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceFolder) {
         vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
@@ -1304,9 +1454,17 @@ async function createGroupCommand(outputChannel) {
         return;
     }
 
+    // Determinar la ruta base desde la que se está creando el grupo
+    let selectedFolder = workspaceFolder;
+    let relativePath = '';
+    if (folderUri && folderUri.fsPath) {
+        selectedFolder = folderUri.fsPath;
+        relativePath = path.relative(workspaceFolder, selectedFolder);
+    }
+
     const groupInput = await vscode.window.showInputBox({
-        prompt: 'Nombre del nuevo grupo (ruta relativa) ',
-        placeHolder: 'subgrupo/nuevo',
+        prompt: 'Nombre del nuevo grupo ',
+        placeHolder: 'nuevo',
         ignoreFocusOut: true
     });
 
@@ -1318,7 +1476,24 @@ async function createGroupCommand(outputChannel) {
         return;
     }
 
-    const fullGroupName = buildFullGroupName(baseGroupName, groupInput);
+    // Construir el nombre completo del grupo basado en la carpeta seleccionada
+    const relativePathParts = relativePath.split(path.sep).filter(p => p);
+    const groupNameParts = splitGroupPath(baseGroupName);
+
+    let subgroupParts = [];
+    if (groupNameParts.length > 0) {
+        const lastGroupPart = groupNameParts[groupNameParts.length - 1];
+        const indexOfGroupPart = relativePathParts.indexOf(lastGroupPart);
+        if (indexOfGroupPart >= 0) {
+            subgroupParts = relativePathParts.slice(indexOfGroupPart + 1);
+        }
+    }
+
+    let fullGroupName = baseGroupName + '/' + inputParts.join('/');
+    if (subgroupParts.length > 0) {
+        fullGroupName = baseGroupName + '/' + subgroupParts.join('/') + '/' + inputParts.join('/');
+    }
+
     const fullParts = splitGroupPath(fullGroupName);
     if (!isSafeGroupParts(fullParts)) {
         vscode.window.showErrorMessage('El nombre del grupo resultante es invalido');
@@ -1335,7 +1510,7 @@ async function createGroupCommand(outputChannel) {
         if (!projectName) return;
     }
 
-    const localGroupDir = resolveLocalGroupDir(workspaceFolder, baseGroupName, fullGroupName);
+    const localGroupDir = path.join(selectedFolder, ...inputParts);
 
     const confirm = await vscode.window.showInformationMessage(
         `Crear grupo '${fullGroupName}' y carpeta local en '${localGroupDir}'?`,
@@ -1614,6 +1789,11 @@ function activate(context) {
         buildCommand(outputChannel);
     });
 
+    // Registrar comando: Pull
+    const downloadDisposable = vscode.commands.registerCommand('py2rocket.download', () => {
+        downloadCommand(outputChannel);
+    });
+
     // Registrar comando: Build and Push
     const buildAndPushDisposable = vscode.commands.registerCommand('py2rocket.buildAndPush', () => {
         buildAndPushCommand(outputChannel);
@@ -1645,11 +1825,12 @@ function activate(context) {
     });
 
     // Registrar comando: Create Group
-    const createGroupDisposable = vscode.commands.registerCommand('py2rocket.createGroup', () => {
-        createGroupCommand(outputChannel);
+    const createGroupDisposable = vscode.commands.registerCommand('py2rocket.createGroup', (folderUri) => {
+        createGroupCommand(folderUri, outputChannel);
     });
 
     context.subscriptions.push(buildDisposable);
+    context.subscriptions.push(downloadDisposable);
     context.subscriptions.push(buildAndPushDisposable);
     context.subscriptions.push(pushDisposable);
     context.subscriptions.push(renderDisposable);
