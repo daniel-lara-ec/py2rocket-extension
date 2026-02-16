@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "author": "Matias Lara",
   "publisher": "matiaslara",
   "engines": {
@@ -62,39 +62,39 @@
       "editor/title": [
         {
           "command": "py2rocket.requestExecution",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "navigation@1"
         }
       ],
       "editor/context": [
         {
           "command": "py2rocket.build",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "py2rocket@1"
         },
         {
           "command": "py2rocket.buildAndPush",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "py2rocket@2"
         },
         {
           "command": "py2rocket.push",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "py2rocket@3"
         },
         {
           "command": "py2rocket.render",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "py2rocket@4"
         },
         {
           "command": "py2rocket.getHistory",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "py2rocket@5"
         },
         {
           "command": "py2rocket.requestExecution",
-          "when": "resourceLangId == python",
+          "when": "editorLangId == python",
           "group": "py2rocket@6"
         }
       ],
