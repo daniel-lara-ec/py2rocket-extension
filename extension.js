@@ -459,21 +459,43 @@ function createHistoryWebView(historyData, context, workflowId) {
     const executions = historyData.executions || [];
     const totalCount = historyData.total_count || 0;
 
+    // Función auxiliar para parsear fecha ISO-8601
+    const formatDate = (dateString) => {
+        if (!dateString) return 'N/A';
+        try {
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return 'N/A';
+            return date.toLocaleString('es-ES');
+        } catch (e) {
+            return 'N/A';
+        }
+    };
+
     // Generar filas de tabla
     const tableRows = executions.map(exec => {
         const execId = exec.id || 'N/A';
-        const state = exec.statuses && exec.statuses[0] ? exec.statuses[0].state : 'Unknown';
-        const creationDate = exec.creationDate || 'N/A';
-        const assetName = exec.assetDataExecution ? exec.assetDataExecution.name : 'N/A';
-        const execName = exec.executionNameDescription ? exec.executionNameDescription.name : 'Sin nombre';
+        const states = exec.statuses || [];
+        const latestState = states.length > 0 ? states[0] : {};
+        const state = latestState.state || 'Unknown';
+        const lastUpdateDate = latestState.lastUpdateDate || 'N/A';
+
+        const assetData = exec.assetDataExecution || {};
+        const assetName = assetData.name || 'N/A';
+        const params = assetData.parametersUsed || {};
+
+        // Crear string de parámetros resumido
+        const paramKeys = Object.keys(params);
+        const paramsStr = paramKeys.length > 0
+            ? paramKeys.slice(0, 3).join(', ') + (paramKeys.length > 3 ? '...' : '')
+            : 'Sin parámetros';
 
         return `
             <tr>
-                <td>${execId.substring(0, 8)}...</td>
-                <td>${execName}</td>
-                <td><span class="state-${state}">${state}</span></td>
-                <td>${new Date(creationDate).toLocaleString('es-ES')}</td>
+                <td title="${execId}">${execId.substring(0, 8)}...</td>
                 <td>${assetName}</td>
+                <td><span class="state-${state}">${state}</span></td>
+                <td>${formatDate(lastUpdateDate)}</td>
+                <td title="${paramsStr}">${paramsStr}</td>
             </tr>
         `;
     }).join('');
@@ -555,6 +577,13 @@ function createHistoryWebView(historyData, context, workflowId) {
                     background-color: var(--vscode-list-hoverBackground);
                 }
                 
+                td[title] {
+                    cursor: help;
+                    text-overflow: ellipsis;
+                    overflow: hidden;
+                    white-space: nowrap;
+                }
+                
                 .state-Completed {
                     background-color: rgba(76, 175, 80, 0.2);
                     color: #4CAF50;
@@ -605,7 +634,7 @@ function createHistoryWebView(historyData, context, workflowId) {
         <body>
             <div id="header">
                 <h2>📋 Historial de Ejecuciones</h2>
-                <input type="text" id="searchBox" placeholder="Buscar por nombre, estado, ID...">
+                <input type="text" id="searchBox" placeholder="Buscar por asset, estado, ID...">
                 <div id="stats">
                     <span>Total de ejecuciones: ${totalCount}</span> | 
                     <span>Mostrando: ${executions.length}</span>
@@ -617,10 +646,10 @@ function createHistoryWebView(historyData, context, workflowId) {
                     <thead>
                         <tr>
                             <th>ID Ejecución</th>
-                            <th>Nombre</th>
-                            <th>Estado</th>
-                            <th>Fecha de Creación</th>
                             <th>Asset</th>
+                            <th>Estado</th>
+                            <th>Última Actualización</th>
+                            <th>Parámetros</th>
                         </tr>
                     </thead>
                     <tbody id="tableBody">
@@ -774,21 +803,33 @@ async function refreshFolderCommand(outputChannel) {
         outputChannel.appendLine(`Group ID: ${groupId}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
 
-        // Borra todo excepto .py2rocket
+        // Borra contenido excepto .py2rocket
         const excludeFiles = ['.py2rocket'];
         const files = fs.readdirSync(workspaceFolder);
 
+        let deleteErrors = [];
         for (const file of files) {
             if (excludeFiles.includes(file)) continue;
             const filePath = path.join(workspaceFolder, file);
-            const stat = fs.statSync(filePath);
-            if (stat.isDirectory()) {
-                fs.rmSync(filePath, { recursive: true, force: true });
-            } else {
-                fs.unlinkSync(filePath);
+            try {
+                const stat = fs.statSync(filePath);
+                if (stat.isDirectory()) {
+                    fs.rmSync(filePath, { recursive: true, force: true });
+                } else {
+                    fs.unlinkSync(filePath);
+                }
+            } catch (err) {
+                deleteErrors.push(`  ⚠️  No se pudo borrar ${file}: ${err.message}`);
             }
         }
-        outputChannel.appendLine('✓ Contenido borrado\n');
+
+        if (deleteErrors.length > 0) {
+            outputChannel.appendLine('✓ Contenido borrado (con algunas advertencias)\n');
+            deleteErrors.forEach(msg => outputChannel.appendLine(msg));
+            outputChannel.appendLine('');
+        } else {
+            outputChannel.appendLine('✓ Contenido borrado\n');
+        }
 
         // Realiza sync del grupo
         const pythonCommand = getPythonCommand();
