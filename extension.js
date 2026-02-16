@@ -1065,6 +1065,7 @@ async function getHistoryCommand(outputChannel, context) {
 /**
  * Comando: Request Execution
  * Abre un formulario para solicitar la ejecución de un workflow
+ * Obtiene los parámetros reales del paquete/módulo
  */
 async function requestExecutionCommand(outputChannel, context) {
     const filePath = getActiveFilePath();
@@ -1080,22 +1081,99 @@ async function requestExecutionCommand(outputChannel, context) {
             return;
         }
 
-        // Por ahora, crear WebView con configuración por defecto
-        // En el futuro, se puede obtener de py2rocket get-execution-parameters
-        const executionConfig = {
-            environments: ['Default', 'Development', 'Production'],
-            sparkConfigurations: ['Default', 'HighMemory', 'HighPerformance'],
-            sparkResources: ['Default', 'Small', 'Medium', 'Large'],
-            userParams: {
-                'P': 'a'  // Parámetros personalizados del workflow
+        outputChannel.show(true);
+        outputChannel.appendLine(`\n${'='.repeat(60)}`);
+        outputChannel.appendLine(`Obteniendo parámetros de ejecución: ${workflowId}`);
+        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+
+        const pythonCommand = getPythonCommand();
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const command = `${pythonCommand} -m py2rocket get-execution-parameters "${workflowId}" -j`;
+
+        const execOptions = {
+            cwd: path.dirname(filePath),
+            shell: true,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8'
             }
         };
 
-        createExecutionWebView(workflowId, context, executionConfig);
-        outputChannel.appendLine(`\n${'='.repeat(60)}`);
-        outputChannel.appendLine(`Formulario de ejecución abierto para: ${workflowId}`);
-        outputChannel.appendLine(`${'='.repeat(60)}\n`);
+        const venvPath = path.join(workspaceFolder, '.venv', 'Scripts');
+        if (fs.existsSync(venvPath)) {
+            execOptions.env.PATH = venvPath + path.delimiter + execOptions.env.PATH;
+        }
 
+        return new Promise((resolve, reject) => {
+            const { execSync } = require('child_process');
+            try {
+                const output = execSync(command, {
+                    ...execOptions,
+                    encoding: 'utf-8'
+                });
+
+                // Parsear JSON
+                const trimmed = output.trim();
+                let paramData = null;
+
+                if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                    paramData = JSON.parse(trimmed);
+                } else {
+                    const start = trimmed.indexOf('{');
+                    const end = trimmed.lastIndexOf('}');
+                    if (start !== -1 && end !== -1 && end > start) {
+                        const jsonBlock = trimmed.slice(start, end + 1);
+                        paramData = JSON.parse(jsonBlock);
+                    }
+                }
+
+                // Procesar parámetros
+                let environments = ['Default'];
+                let sparkConfigurations = ['Default'];
+                let sparkResources = ['Default'];
+                let userParams = {};
+
+                if (paramData) {
+                    if (paramData.environments && Array.isArray(paramData.environments)) {
+                        environments = paramData.environments.length > 0 ? paramData.environments : ['Default'];
+                    }
+                    if (paramData.sparkConfigurations && Array.isArray(paramData.sparkConfigurations)) {
+                        sparkConfigurations = paramData.sparkConfigurations.length > 0 ? paramData.sparkConfigurations : ['Default'];
+                    }
+                    if (paramData.sparkResources && Array.isArray(paramData.sparkResources)) {
+                        sparkResources = paramData.sparkResources.length > 0 ? paramData.sparkResources : ['Default'];
+                    }
+                    if (paramData.userParams && typeof paramData.userParams === 'object') {
+                        userParams = paramData.userParams;
+                    }
+                }
+
+                const executionConfig = {
+                    environments,
+                    sparkConfigurations,
+                    sparkResources,
+                    userParams
+                };
+
+                outputChannel.appendLine(`✓ Parámetros obtenidos exitosamente`);
+                createExecutionWebView(workflowId, context, executionConfig);
+                resolve();
+            } catch (error) {
+                outputChannel.appendLine(`\n⚠️  No se pudieron obtener parámetros del servidor, usando valores por defecto`);
+                outputChannel.appendLine(`Error: ${error.message}\n`);
+
+                // Usar configuración por defecto si falla
+                const executionConfig = {
+                    environments: ['Default'],
+                    sparkConfigurations: ['Default'],
+                    sparkResources: ['Default'],
+                    userParams: {}
+                };
+
+                createExecutionWebView(workflowId, context, executionConfig);
+                resolve();
+            }
+        });
     } catch (error) {
         outputChannel.appendLine(`\n❌ Error: ${error.message}`);
         vscode.window.showErrorMessage(`Error: ${error.message}`);
