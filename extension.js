@@ -548,6 +548,250 @@ function extractWorkflowId(fileContent) {
     return null;
 }
 
+function parseJsonFromCommandOutput(output) {
+    const trimmed = (output || '').trim();
+    if (!trimmed) {
+        throw new Error('Salida vacía del comando');
+    }
+
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        return JSON.parse(trimmed);
+    }
+
+    const startObj = trimmed.indexOf('{');
+    const endObj = trimmed.lastIndexOf('}');
+    if (startObj !== -1 && endObj !== -1 && endObj > startObj) {
+        return JSON.parse(trimmed.slice(startObj, endObj + 1));
+    }
+
+    const startArr = trimmed.indexOf('[');
+    const endArr = trimmed.lastIndexOf(']');
+    if (startArr !== -1 && endArr !== -1 && endArr > startArr) {
+        return JSON.parse(trimmed.slice(startArr, endArr + 1));
+    }
+
+    throw new Error('No se encontró JSON válido en la salida');
+}
+
+function normalizeExtraParamsWithDefault(extraParamsWithDefault) {
+    const normalized = {};
+
+    if (Array.isArray(extraParamsWithDefault)) {
+        extraParamsWithDefault.forEach(item => {
+            if (item && typeof item === 'object' && item.name) {
+                normalized[item.name] = item.value ?? '';
+            }
+        });
+        return normalized;
+    }
+
+    if (extraParamsWithDefault && typeof extraParamsWithDefault === 'object') {
+        Object.entries(extraParamsWithDefault).forEach(([name, value]) => {
+            normalized[name] = value ?? '';
+        });
+    }
+
+    return normalized;
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getCurrentPipelineParamsLists(filePath) {
+    try {
+        const inputPath = filePath || '';
+        const jsonPath = inputPath.endsWith('.json')
+            ? inputPath
+            : inputPath.endsWith('.py')
+                ? inputPath.replace(/\.py$/i, '.json')
+                : `${inputPath}.json`;
+
+        if (!fs.existsSync(jsonPath)) {
+            return [];
+        }
+
+        const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+        const paramsLists = data?.settings?.global?.parametersLists;
+        return Array.isArray(paramsLists) ? paramsLists.filter(p => typeof p === 'string') : [];
+    } catch {
+        return [];
+    }
+}
+
+function resolvePy2RocketWorkingDir(filePath) {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const candidates = [
+        path.dirname(filePath || ''),
+        workspaceFolder,
+        workspaceFolder ? path.join(workspaceFolder, 'py2rocket') : null
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+        const pyprojectPath = path.join(candidate, 'pyproject.toml');
+        const packageMainPath = path.join(candidate, 'py2rocket', '__main__.py');
+        if (fs.existsSync(pyprojectPath) && fs.existsSync(packageMainPath)) {
+            return candidate;
+        }
+    }
+
+    return path.dirname(filePath || '') || workspaceFolder || process.cwd();
+}
+
+function formatExecError(error) {
+    const stdout = error && error.stdout ? String(error.stdout) : '';
+    const stderr = error && error.stderr ? String(error.stderr) : '';
+    const status = typeof error?.status !== 'undefined' ? `Código: ${error.status}` : '';
+
+    const parts = [
+        error?.message || 'Error ejecutando comando',
+        status,
+        stdout ? `\nSTDOUT:\n${stdout}` : '',
+        stderr ? `\nSTDERR:\n${stderr}` : ''
+    ].filter(Boolean);
+
+    return {
+        stdout,
+        stderr,
+        message: parts.join('\n')
+    };
+}
+
+function buildExecutionConfigFromRunView(paramData, currentParamsLists = []) {
+    const groupsAndContexts = Array.isArray(paramData?.groupsAndContexts) ? paramData.groupsAndContexts : [];
+    const currentSet = new Set(currentParamsLists || []);
+
+    const contextGroups = [];
+    const fixedParamsLists = [];
+
+    groupsAndContexts.forEach((group, index) => {
+        const listName = group?.parameterList?.name || `Lista ${index + 1}`;
+        const contexts = Array.isArray(group?.contexts)
+            ? group.contexts.map(ctx => ctx?.name).filter(Boolean)
+            : [];
+
+        if (contexts.length > 0) {
+            const selected = contexts.find(ctx => currentSet.has(ctx)) || contexts[0];
+            contextGroups.push({
+                listName,
+                contexts,
+                selected
+            });
+        } else if (listName) {
+            fixedParamsLists.push(listName);
+        }
+    });
+
+    const extraRequired = Array.isArray(paramData?.extraParams)
+        ? paramData.extraParams
+            .map(item => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object' && item.name) return item.name;
+                return null;
+            })
+            .filter(Boolean)
+        : [];
+
+    const extraDefaults = normalizeExtraParamsWithDefault(paramData?.extraParamsWithDefault);
+
+    return {
+        contextGroups,
+        fixedParamsLists,
+        extraRequired,
+        extraDefaults
+    };
+}
+
+function shellQuote(value) {
+    const safe = String(value ?? '').replace(/"/g, '""');
+    return `"${safe}"`;
+}
+
+async function executeWorkflowFromWebView(data, workflowId, filePath, outputChannel) {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceFolder) {
+        vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
+        return;
+    }
+
+    const pythonCommand = getPythonCommand();
+    const commandWorkingDir = resolvePy2RocketWorkingDir(filePath);
+    const tempDir = path.join(workspaceFolder, '.py2rocket-tmp');
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    const runId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const paramsListsFile = path.join(tempDir, `params_lists_${runId}.json`);
+    const extraParamsFile = path.join(tempDir, `extra_params_${runId}.json`);
+
+    try {
+        fs.writeFileSync(paramsListsFile, JSON.stringify(data.paramsLists || [], null, 2), 'utf-8');
+        fs.writeFileSync(extraParamsFile, JSON.stringify(data.extraParams || [], null, 2), 'utf-8');
+
+        const absoluteInputPath = path.resolve(filePath);
+        let runInputPath = absoluteInputPath;
+
+        if (absoluteInputPath.endsWith('.json')) {
+            if (!fs.existsSync(absoluteInputPath)) {
+                throw new Error(`Archivo no encontrado: ${absoluteInputPath}`);
+            }
+        } else if (absoluteInputPath.endsWith('.py')) {
+            const absoluteJsonPath = absoluteInputPath.replace(/\.py$/i, '.json');
+            if (!fs.existsSync(absoluteJsonPath)) {
+                outputChannel.appendLine(`[⚙️] No se encontró JSON compilado. Generando: ${path.basename(absoluteJsonPath)}`);
+                const buildCommand = `${pythonCommand} -m py2rocket build ${shellQuote(path.basename(absoluteInputPath))}`;
+                await executePy2RocketCommand(buildCommand, absoluteInputPath, outputChannel, path.dirname(absoluteInputPath));
+            }
+
+            if (!fs.existsSync(absoluteJsonPath)) {
+                throw new Error(`No se pudo generar el archivo JSON para ejecutar: ${absoluteJsonPath}`);
+            }
+
+            runInputPath = absoluteJsonPath;
+        }
+
+        const jsonInputArg = shellQuote(runInputPath);
+        const commandParts = [
+            `${pythonCommand} -m py2rocket run ${jsonInputArg}`,
+            `--workflow-id ${shellQuote(workflowId)}`,
+            `--params-lists-file ${shellQuote(paramsListsFile)}`,
+            `--extra-params ${shellQuote(extraParamsFile)}`,
+            `--instance ${shellQuote(data.instance || 'XS')}`,
+            `--execution-priority ${Number(data.executionPriority) || 0}`,
+            `--max-attempts ${Number(data.maxAttempts) || 0}`
+        ];
+
+        if (data.projectId && String(data.projectId).trim()) {
+            commandParts.push(`--project-id ${shellQuote(String(data.projectId).trim())}`);
+        }
+        if (data.executionName && String(data.executionName).trim()) {
+            commandParts.push(`--execution-name ${shellQuote(String(data.executionName).trim())}`);
+        }
+        if (data.executionDescription && String(data.executionDescription).trim()) {
+            commandParts.push(`--execution-description ${shellQuote(String(data.executionDescription).trim())}`);
+        }
+        if (data.forceExecutionIfAvailableResources) {
+            commandParts.push('--force-execution-if-available-resources');
+        }
+        if (data.retryUnsuccessfulWrites) {
+            commandParts.push('--retry-unsuccessful-writes');
+        }
+        if (data.extendedAuditInfo) {
+            commandParts.push('--extended-audit-info');
+        }
+
+        const command = commandParts.join(' ');
+        await executePy2RocketCommand(command, filePath, outputChannel, commandWorkingDir);
+    } finally {
+        try { fs.unlinkSync(paramsListsFile); } catch { }
+        try { fs.unlinkSync(extraParamsFile); } catch { }
+    }
+}
+
 /**
  * Crea un WebView con formulario para solicitar ejecución del workflow
  * @param {string} workflowId - ID del workflow
@@ -565,17 +809,36 @@ function createExecutionWebView(workflowId, context, executionConfig = {}) {
         }
     );
 
-    const environments = executionConfig.environments || ['Default'];
-    const sparkConfigurations = executionConfig.sparkConfigurations || ['Default'];
-    const sparkResources = executionConfig.sparkResources || ['Default'];
-    const userParams = executionConfig.userParams || {};
-    const priorities = ['Normal', 'High', 'Low'];
+    const contextGroups = executionConfig.contextGroups || [];
+    const fixedParamsLists = executionConfig.fixedParamsLists || [];
+    const extraRequired = executionConfig.extraRequired || [];
+    const extraDefaults = executionConfig.extraDefaults || {};
+    const projectIdDefault = executionConfig.projectIdDefault || '';
 
-    // Generar HTML de campos personalizados
-    const paramsFieldsHtml = Object.entries(userParams).map(([name, defaultValue]) => `
+    const contextFieldsHtml = contextGroups.map((group, index) => `
         <div class="form-group">
-            <label for="param_${name}">${name}</label>
-            <input type="text" id="param_${name}" name="${name}" value="${defaultValue || ''}" />
+            <label for="ctx_${index}">${escapeHtml(group.listName)}</label>
+            <select id="ctx_${index}" class="context-select" data-list-name="${escapeHtml(group.listName)}" required>
+                ${group.contexts.map(ctx => `<option value="${escapeHtml(ctx)}" ${ctx === group.selected ? 'selected' : ''}>${escapeHtml(ctx)}</option>`).join('')}
+            </select>
+        </div>
+    `).join('');
+
+    const fixedFieldsHtml = fixedParamsLists.map(name => `
+        <div class="info-item">${escapeHtml(name)}</div>
+    `).join('');
+
+    const extraRequiredHtml = extraRequired.map((name, index) => `
+        <div class="form-group">
+            <label for="extra_required_${index}">${escapeHtml(name)} <span class="required">*</span></label>
+            <input type="text" id="extra_required_${index}" class="extra-required" data-name="${escapeHtml(name)}" required />
+        </div>
+    `).join('');
+
+    const extraDefaultsHtml = Object.entries(extraDefaults).map(([name, value], index) => `
+        <div class="form-group">
+            <label for="extra_default_${index}">${escapeHtml(name)}</label>
+            <input type="text" id="extra_default_${index}" class="extra-default" data-name="${escapeHtml(name)}" value="${escapeHtml(value)}" />
         </div>
     `).join('');
 
@@ -613,6 +876,36 @@ function createExecutionWebView(workflowId, context, executionConfig = {}) {
                     background-color: var(--vscode-sideBar-background);
                     border-radius: 4px;
                     border-left: 3px solid var(--vscode-focusBorder);
+                }
+
+                .step {
+                    display: none;
+                }
+
+                .step.active {
+                    display: block;
+                }
+
+                .stepper {
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 20px;
+                }
+
+                .step-indicator {
+                    flex: 1;
+                    padding: 8px 10px;
+                    border: 1px solid var(--vscode-panel-border);
+                    border-radius: 4px;
+                    font-size: 12px;
+                    text-align: center;
+                    opacity: 0.7;
+                }
+
+                .step-indicator.active {
+                    opacity: 1;
+                    border-color: var(--vscode-focusBorder);
+                    background-color: var(--vscode-inputOption-activeBackground);
                 }
                 
                 .section-title {
@@ -712,110 +1005,221 @@ function createExecutionWebView(workflowId, context, executionConfig = {}) {
                     color: var(--vscode-descriptionForeground);
                     margin-top: 5px;
                 }
+
+                .info-item {
+                    padding: 6px 10px;
+                    border: 1px solid var(--vscode-panel-border);
+                    border-radius: 3px;
+                    margin-bottom: 8px;
+                    font-size: 13px;
+                }
+
+                .required {
+                    color: var(--vscode-errorForeground);
+                }
+
+                .error-text {
+                    color: var(--vscode-errorForeground);
+                    font-size: 12px;
+                    margin-top: 8px;
+                    min-height: 16px;
+                }
             </style>
         </head>
         <body>
             <div class="container">
                 <h2>▶️ Solicitar Ejecución del Workflow</h2>
+
+                <div class="stepper">
+                    <div id="stepIndicator1" class="step-indicator active">1) Parámetros del workflow</div>
+                    <div id="stepIndicator2" class="step-indicator">2) Configuración y ejecución</div>
+                </div>
                 
                 <form id="executionForm">
-                    <!-- Execution Contexts -->
-                    <div class="section">
-                        <div class="section-title">Contextos de Ejecución</div>
-                        
-                        <div class="form-group">
-                            <label for="environment">Environment</label>
-                            <select id="environment" name="environment">
-                                ${environments.map(env => `<option value="${env}">${env}</option>`).join('')}
-                            </select>
+                    <div id="step1" class="step active">
+                        <div class="section">
+                            <div class="section-title">Contextos requeridos (paramsLists)</div>
+                            ${contextFieldsHtml || '<div class="info-text">No hay contextos para seleccionar.</div>'}
                         </div>
-                        
-                        <div class="form-group">
-                            <label for="sparkConfig">SparkConfigurations</label>
-                            <select id="sparkConfig" name="sparkConfig">
-                                ${sparkConfigurations.map(config => `<option value="${config}">${config}</option>`).join('')}
-                            </select>
+
+                        <div class="section">
+                            <div class="section-title">Listas incluidas automáticamente</div>
+                            ${fixedFieldsHtml || '<div class="info-text">No hay listas fijas.</div>'}
                         </div>
-                        
-                        <div class="form-group">
-                            <label for="sparkResources">SparkResources</label>
-                            <select id="sparkResources" name="sparkResources">
-                                ${sparkResources.map(res => `<option value="${res}">${res}</option>`).join('')}
-                            </select>
+
+                        ${extraRequired.length > 0 ? `
+                        <div class="section">
+                            <div class="section-title">Parámetros extra obligatorios</div>
+                            ${extraRequiredHtml}
                         </div>
-                    </div>
-                    
-                    <!-- User Parameters -->
-                    ${Object.keys(userParams).length > 0 ? `
-                    <div class="section">
-                        <div class="section-title">Parámetros Personalizados</div>
-                        ${paramsFieldsHtml}
-                    </div>
-                    ` : ''}
-                    
-                    <!-- Execution Priority -->
-                    <div class="section">
-                        <div class="form-group">
-                            <label for="priority">Execution Priority</label>
-                            <select id="priority" name="priority">
-                                ${priorities.map(p => `<option value="${p}">${p}</option>`).join('')}
-                            </select>
+                        ` : ''}
+
+                        ${Object.keys(extraDefaults).length > 0 ? `
+                        <div class="section">
+                            <div class="section-title">Parámetros con valor por defecto</div>
+                            ${extraDefaultsHtml}
+                        </div>
+                        ` : ''}
+
+                        <div class="error-text" id="stage1Error"></div>
+
+                        <div class="button-group">
+                            <button type="button" class="btn-cancel" onclick="cancelExecution()">Cancelar</button>
+                            <button type="button" class="btn-submit" onclick="goToStage2()">Siguiente</button>
                         </div>
                     </div>
-                    
-                    <!-- Tryouts -->
-                    <div class="section">
-                        <div class="form-group">
-                            <label for="tryouts">Reintentos si falla</label>
-                            <input type="number" id="tryouts" name="tryouts" value="0" min="0" max="10" />
+
+                    <div id="step2" class="step">
+                        <div class="section">
+                            <div class="section-title">Parámetros de ejecución</div>
+                            <div class="form-group">
+                                <label for="projectId">Project ID (opcional si está en .env)</label>
+                                <input type="text" id="projectId" value="${escapeHtml(projectIdDefault)}" />
+                            </div>
+                            <div class="form-group">
+                                <label for="instance">Instance</label>
+                                <input type="text" id="instance" value="XS" />
+                            </div>
                         </div>
-                        
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="retryUnsuccessful" name="retryUnsuccessful" />
-                            <label for="retryUnsuccessful" style="margin-bottom: 0;">Solo reintentar escrituras fallidas</label>
+
+                        <div class="section">
+                            <div class="section-title">Execution Settings</div>
+                            <div class="form-group">
+                                <label for="executionName">Nombre de ejecución</label>
+                                <input type="text" id="executionName" />
+                            </div>
+                            <div class="form-group">
+                                <label for="executionDescription">Descripción</label>
+                                <input type="text" id="executionDescription" />
+                            </div>
+                            <div class="form-group">
+                                <label for="executionPriority">Execution Priority</label>
+                                <input type="number" id="executionPriority" value="0" min="0" />
+                            </div>
+                            <div class="form-group">
+                                <label for="maxAttempts">Max Attempts</label>
+                                <input type="number" id="maxAttempts" value="0" min="0" />
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="forceExecutionIfAvailableResources" />
+                                <label for="forceExecutionIfAvailableResources" style="margin-bottom: 0;">Forzar ejecución si hay recursos</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="retryUnsuccessfulWrites" />
+                                <label for="retryUnsuccessfulWrites" style="margin-bottom: 0;">Reintentar escrituras fallidas</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="extendedAuditInfo" />
+                                <label for="extendedAuditInfo" style="margin-bottom: 0;">Auditoría extendida</label>
+                            </div>
                         </div>
-                    </div>
-                    
-                    <!-- Governance -->
-                    <div class="section">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="extendedAudit" name="extendedAudit" />
-                            <label for="extendedAudit" style="margin-bottom: 0;">Información de auditoría extendida</label>
+
+                        <div class="error-text" id="stage2Error"></div>
+
+                        <div class="button-group">
+                            <button type="button" class="btn-cancel" onclick="backToStage1()">Atrás</button>
+                            <button type="button" class="btn-submit" onclick="submitExecution()">Ejecutar Workflow</button>
                         </div>
-                    </div>
-                    
-                    <!-- Buttons -->
-                    <div class="button-group">
-                        <button type="button" class="btn-cancel" onclick="cancelExecution()">Cancelar</button>
-                        <button type="button" class="btn-submit" onclick="submitExecution()">Ejecutar Workflow</button>
                     </div>
                 </form>
             </div>
             
             <script>
                 const vscode = acquireVsCodeApi();
+                const fixedParamsLists = ${JSON.stringify(fixedParamsLists).replace(/</g, '\\u003c')};
+                let stage1Data = null;
+
+                function setStep(stepNumber) {
+                    const step1 = document.getElementById('step1');
+                    const step2 = document.getElementById('step2');
+                    const indicator1 = document.getElementById('stepIndicator1');
+                    const indicator2 = document.getElementById('stepIndicator2');
+
+                    if (stepNumber === 1) {
+                        step1.classList.add('active');
+                        step2.classList.remove('active');
+                        indicator1.classList.add('active');
+                        indicator2.classList.remove('active');
+                    } else {
+                        step1.classList.remove('active');
+                        step2.classList.add('active');
+                        indicator1.classList.remove('active');
+                        indicator2.classList.add('active');
+                    }
+                }
+
+                function collectStage1Data() {
+                    const selectedContexts = [];
+                    document.querySelectorAll('.context-select').forEach(select => {
+                        if (select.value) {
+                            selectedContexts.push(select.value);
+                        }
+                    });
+
+                    const paramsLists = [...fixedParamsLists, ...selectedContexts];
+
+                    const extraParams = [];
+                    let hasMissingRequired = false;
+
+                    document.querySelectorAll('.extra-required').forEach(input => {
+                        const name = input.getAttribute('data-name');
+                        const value = input.value ?? '';
+                        if (!value.trim()) {
+                            hasMissingRequired = true;
+                        }
+                        extraParams.push({ name, value });
+                    });
+
+                    document.querySelectorAll('.extra-default').forEach(input => {
+                        const name = input.getAttribute('data-name');
+                        const value = input.value ?? '';
+                        extraParams.push({ name, value });
+                    });
+
+                    return { paramsLists, extraParams, hasMissingRequired };
+                }
+
+                function goToStage2() {
+                    const errorEl = document.getElementById('stage1Error');
+                    errorEl.textContent = '';
+
+                    const data = collectStage1Data();
+                    if (data.hasMissingRequired) {
+                        errorEl.textContent = 'Completa todos los parámetros extra obligatorios.';
+                        return;
+                    }
+
+                    stage1Data = data;
+                    setStep(2);
+                }
+
+                function backToStage1() {
+                    setStep(1);
+                }
                 
                 function submitExecution() {
-                    const form = document.getElementById('executionForm');
-                    const formData = new FormData(form);
-                    
+                    const errorEl = document.getElementById('stage2Error');
+                    errorEl.textContent = '';
+
+                    if (!stage1Data) {
+                        errorEl.textContent = 'Debes completar primero la etapa 1.';
+                        return;
+                    }
+
                     const executionData = {
-                        environment: formData.get('environment'),
-                        sparkConfig: formData.get('sparkConfig'),
-                        sparkResources: formData.get('sparkResources'),
-                        priority: formData.get('priority'),
-                        tryouts: parseInt(formData.get('tryouts')) || 0,
-                        retryUnsuccessful: formData.get('retryUnsuccessful') === 'on',
-                        extendedAudit: formData.get('extendedAudit') === 'on',
-                        userParams: {}
+                        paramsLists: stage1Data.paramsLists,
+                        extraParams: stage1Data.extraParams,
+                        projectId: document.getElementById('projectId').value,
+                        instance: document.getElementById('instance').value || 'XS',
+                        executionName: document.getElementById('executionName').value,
+                        executionDescription: document.getElementById('executionDescription').value,
+                        executionPriority: parseInt(document.getElementById('executionPriority').value) || 0,
+                        maxAttempts: parseInt(document.getElementById('maxAttempts').value) || 0,
+                        forceExecutionIfAvailableResources: document.getElementById('forceExecutionIfAvailableResources').checked,
+                        retryUnsuccessfulWrites: document.getElementById('retryUnsuccessfulWrites').checked,
+                        extendedAuditInfo: document.getElementById('extendedAuditInfo').checked
                     };
-                    
-                    // Recolectar parámetros personalizados
-                    document.querySelectorAll('input[name^="param_"]').forEach(input => {
-                        const paramName = input.name.replace('param_', '');
-                        executionData.userParams[paramName] = input.value;
-                    });
-                    
+
                     vscode.postMessage({
                         command: 'executeWorkflow',
                         data: executionData
@@ -834,12 +1238,14 @@ function createExecutionWebView(workflowId, context, executionConfig = {}) {
 
     // Manejar mensajes desde el WebView
     panel.webview.onDidReceiveMessage(
-        message => {
+        async message => {
             if (message.command === 'executeWorkflow') {
-                vscode.window.showInformationMessage(
-                    `Ejecutando workflow con configuración: ${JSON.stringify(message.data)}`
-                );
-                // Aquí se llamaría al comando de ejecución real
+                try {
+                    await executeWorkflowFromWebView(message.data, workflowId, executionConfig.filePath, executionConfig.outputChannel);
+                    panel.dispose();
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error al ejecutar workflow: ${error.message}`);
+                }
             } else if (message.command === 'cancelExecution') {
                 panel.dispose();
             }
@@ -880,6 +1286,56 @@ function createHistoryWebView(historyData, context, workflowId) {
         }
     };
 
+    const formatParameterValue = (value) => {
+        if (value === null || typeof value === 'undefined') return '';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        try {
+            return JSON.stringify(value, null, 2);
+        } catch {
+            return String(value);
+        }
+    };
+
+    const isVisibleParameter = (key) => {
+        return !key.startsWith('SparkConfigurations')
+            && !key.startsWith('Environment')
+            && !key.startsWith('SparkResources');
+    };
+
+    const renderParametersTable = (params) => {
+        const entries = Object.entries(params || {}).filter(([key]) => isVisibleParameter(key));
+        if (entries.length === 0) {
+            return '<span class="no-params">Sin parámetros</span>';
+        }
+
+        const rows = entries.map(([key, value]) => {
+            const valueStr = escapeHtml(formatParameterValue(value));
+            return `
+                <tr>
+                    <td class="param-name" title="${escapeHtml(key)}">${escapeHtml(key)}</td>
+                    <td class="param-value"><pre>${valueStr}</pre></td>
+                </tr>
+            `;
+        }).join('');
+
+        return `
+            <div class="params-table-wrapper">
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th>Parámetro</th>
+                            <th>Valor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    };
+
     // Generar filas de tabla
     const tableRows = executions.map(exec => {
         const execId = exec.id || 'N/A';
@@ -891,12 +1347,7 @@ function createHistoryWebView(historyData, context, workflowId) {
         const assetData = exec.assetDataExecution || {};
         const assetName = assetData.name || 'N/A';
         const params = assetData.parametersUsed || {};
-
-        // Crear string de parámetros resumido
-        const paramKeys = Object.keys(params).filter((key) => !key.startsWith('SparkConfigurations') && !key.startsWith('Environment') && !key.startsWith('SparkResources'));
-        const paramsStr = paramKeys.length > 0
-            ? paramKeys.slice(0, 3).join(', ') + (paramKeys.length > 3 ? '...' : '')
-            : 'Sin parámetros';
+        const paramsTable = renderParametersTable(params);
 
         return `
             <tr>
@@ -904,7 +1355,7 @@ function createHistoryWebView(historyData, context, workflowId) {
                 <td>${assetName}</td>
                 <td><span class="state-${state}">${state}</span></td>
                 <td>${formatDate(lastUpdateDate)}</td>
-                <td title="${paramsStr}">${paramsStr}</td>
+                <td>${paramsTable}</td>
             </tr>
         `;
     }).join('');
@@ -991,6 +1442,53 @@ function createHistoryWebView(historyData, context, workflowId) {
                     text-overflow: ellipsis;
                     overflow: hidden;
                     white-space: nowrap;
+                }
+
+                .params-table-wrapper {
+                    max-height: 220px;
+                    overflow: auto;
+                    border: 1px solid var(--vscode-panel-border);
+                    border-radius: 4px;
+                }
+
+                .params-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 12px;
+                }
+
+                .params-table th {
+                    position: sticky;
+                    top: 0;
+                    z-index: 1;
+                    font-size: 11px;
+                    padding: 6px 8px;
+                }
+
+                .params-table td {
+                    padding: 6px 8px;
+                    vertical-align: top;
+                }
+
+                .param-name {
+                    width: 35%;
+                    font-weight: 600;
+                    word-break: break-word;
+                }
+
+                .param-value {
+                    width: 65%;
+                }
+
+                .param-value pre {
+                    margin: 0;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    font-family: var(--vscode-editor-font-family);
+                }
+
+                .no-params {
+                    color: var(--vscode-descriptionForeground);
                 }
                 
                 .state-Completed {
@@ -1197,10 +1695,11 @@ async function requestExecutionCommand(outputChannel, context) {
 
         const pythonCommand = getPythonCommand();
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const command = `${pythonCommand} -m py2rocket get-execution-parameters "${workflowId}" -j`;
+        const command = `${pythonCommand} -m py2rocket run-view-parameters "${workflowId}" -j`;
+        const commandWorkingDir = resolvePy2RocketWorkingDir(filePath);
 
         const execOptions = {
-            cwd: path.dirname(filePath),
+            cwd: commandWorkingDir,
             shell: true,
             env: {
                 ...process.env,
@@ -1221,66 +1720,31 @@ async function requestExecutionCommand(outputChannel, context) {
                     encoding: 'utf-8'
                 });
 
-                // Parsear JSON
-                const trimmed = output.trim();
-                let paramData = null;
-
-                if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-                    paramData = JSON.parse(trimmed);
-                } else {
-                    const start = trimmed.indexOf('{');
-                    const end = trimmed.lastIndexOf('}');
-                    if (start !== -1 && end !== -1 && end > start) {
-                        const jsonBlock = trimmed.slice(start, end + 1);
-                        paramData = JSON.parse(jsonBlock);
-                    }
+                const paramData = parseJsonFromCommandOutput(output);
+                if (!paramData || paramData.status !== 'success') {
+                    throw new Error(paramData?.message || 'Respuesta inválida en run-view-parameters');
                 }
 
-                // Procesar parámetros
-                let environments = ['Default'];
-                let sparkConfigurations = ['Default'];
-                let sparkResources = ['Default'];
-                let userParams = {};
-
-                if (paramData) {
-                    if (paramData.environments && Array.isArray(paramData.environments)) {
-                        environments = paramData.environments.length > 0 ? paramData.environments : ['Default'];
-                    }
-                    if (paramData.sparkConfigurations && Array.isArray(paramData.sparkConfigurations)) {
-                        sparkConfigurations = paramData.sparkConfigurations.length > 0 ? paramData.sparkConfigurations : ['Default'];
-                    }
-                    if (paramData.sparkResources && Array.isArray(paramData.sparkResources)) {
-                        sparkResources = paramData.sparkResources.length > 0 ? paramData.sparkResources : ['Default'];
-                    }
-                    if (paramData.userParams && typeof paramData.userParams === 'object') {
-                        userParams = paramData.userParams;
-                    }
-                }
-
+                const currentParamsLists = getCurrentPipelineParamsLists(filePath);
+                const parsedConfig = buildExecutionConfigFromRunView(paramData, currentParamsLists);
                 const executionConfig = {
-                    environments,
-                    sparkConfigurations,
-                    sparkResources,
-                    userParams
+                    ...parsedConfig,
+                    projectIdDefault: process.env.PROJECT_ID || '',
+                    filePath,
+                    outputChannel
                 };
 
-                outputChannel.appendLine(`✓ Parámetros obtenidos exitosamente`);
+                outputChannel.appendLine('✓ Parámetros obtenidos exitosamente (etapa 1)');
                 createExecutionWebView(workflowId, context, executionConfig);
                 resolve();
             } catch (error) {
-                outputChannel.appendLine(`\n⚠️  No se pudieron obtener parámetros del servidor, usando valores por defecto`);
-                outputChannel.appendLine(`Error: ${error.message}\n`);
+                const formatted = formatExecError(error);
+                outputChannel.appendLine(`\n❌ Error obteniendo parámetros de ejecución:\n${formatted.message}`);
 
-                // Usar configuración por defecto si falla
-                const executionConfig = {
-                    environments: ['Default'],
-                    sparkConfigurations: ['Default'],
-                    sparkResources: ['Default'],
-                    userParams: {}
-                };
-
-                createExecutionWebView(workflowId, context, executionConfig);
-                resolve();
+                const shortReason = formatted.stderr || formatted.stdout || error.message;
+                const shortLine = String(shortReason).split(/\r?\n/).find(line => line.trim()) || error.message;
+                vscode.window.showErrorMessage(`No se pudieron obtener los parámetros del workflow: ${shortLine}`);
+                reject(error);
             }
         });
     } catch (error) {
