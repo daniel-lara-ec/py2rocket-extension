@@ -1351,11 +1351,11 @@ function createHistoryWebView(historyData, context, workflowId) {
 
         return `
             <tr>
-                <td title="${execId}">${execId.substring(0, 8)}...</td>
-                <td>${assetName}</td>
-                <td><span class="state-${state}">${state}</span></td>
-                <td>${formatDate(lastUpdateDate)}</td>
-                <td>${paramsTable}</td>
+                <td class="col-id" title="${execId}">${execId.substring(0, 8)}...</td>
+                <td class="col-asset">${assetName}</td>
+                <td class="col-state"><span class="state-${state}">${state}</span></td>
+                <td class="col-updated">${formatDate(lastUpdateDate)}</td>
+                <td class="col-params">${paramsTable}</td>
             </tr>
         `;
     }).join('');
@@ -1415,6 +1415,41 @@ function createHistoryWebView(historyData, context, workflowId) {
                     border-collapse: collapse;
                     background-color: var(--vscode-editor-background);
                 }
+
+                #historyTable {
+                    table-layout: fixed;
+                }
+
+                #historyTable th.col-id,
+                #historyTable td.col-id {
+                    width: 12%;
+                    white-space: nowrap;
+                    text-overflow: ellipsis;
+                    overflow: hidden;
+                }
+
+                #historyTable th.col-asset,
+                #historyTable td.col-asset {
+                    width: 20%;
+                    overflow-wrap: anywhere;
+                }
+
+                #historyTable th.col-state,
+                #historyTable td.col-state {
+                    width: 10%;
+                    white-space: nowrap;
+                }
+
+                #historyTable th.col-updated,
+                #historyTable td.col-updated {
+                    width: 16%;
+                    white-space: nowrap;
+                }
+
+                #historyTable th.col-params,
+                #historyTable td.col-params {
+                    width: 42%;
+                }
                 
                 th {
                     background-color: var(--vscode-sideBar-background);
@@ -1444,6 +1479,12 @@ function createHistoryWebView(historyData, context, workflowId) {
                     white-space: nowrap;
                 }
 
+                .params-table td[title] {
+                    text-overflow: clip;
+                    overflow: visible;
+                    white-space: normal;
+                }
+
                 .params-table-wrapper {
                     max-height: 220px;
                     overflow: auto;
@@ -1455,6 +1496,7 @@ function createHistoryWebView(historyData, context, workflowId) {
                     width: 100%;
                     border-collapse: collapse;
                     font-size: 12px;
+                    table-layout: fixed;
                 }
 
                 .params-table th {
@@ -1473,16 +1515,19 @@ function createHistoryWebView(historyData, context, workflowId) {
                 .param-name {
                     width: 35%;
                     font-weight: 600;
+                    overflow-wrap: anywhere;
                     word-break: break-word;
                 }
 
                 .param-value {
                     width: 65%;
+                    min-width: 220px;
                 }
 
                 .param-value pre {
                     margin: 0;
                     white-space: pre-wrap;
+                    overflow-wrap: anywhere;
                     word-break: break-word;
                     font-family: var(--vscode-editor-font-family);
                 }
@@ -1552,11 +1597,11 @@ function createHistoryWebView(historyData, context, workflowId) {
                 <table id="historyTable">
                     <thead>
                         <tr>
-                            <th>ID Ejecución</th>
-                            <th>Asset</th>
-                            <th>Estado</th>
-                            <th>Última Actualización</th>
-                            <th>Parámetros</th>
+                            <th class="col-id">ID Ejecución</th>
+                            <th class="col-asset">Asset</th>
+                            <th class="col-state">Estado</th>
+                            <th class="col-updated">Última Actualización</th>
+                            <th class="col-params">Parámetros</th>
                         </tr>
                     </thead>
                     <tbody id="tableBody">
