@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.24.0",
+  "version": "0.24.1",
   "author": "Matias Lara",
   "publisher": "matiaslara",
   "engines": {
@@ -156,6 +156,11 @@
           "type": "string",
           "default": "python",
           "description": "Ruta del ejecutable de Python usado para ejecutar py2rocket (por ejemplo, .venv\\Scripts\\python.exe)"
+        },
+        "py2rocket.autoShowOutput": {
+          "type": "boolean",
+          "default": false,
+          "description": "Muestra automáticamente el canal de salida de Py2Rocket al ejecutar comandos"
         }
       }
     }

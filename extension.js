@@ -21,7 +21,7 @@ function executePy2RocketCommand(command, filePath, outputChannel, workingDir = 
             return;
         }
 
-        outputChannel.show(true);
+        maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Ejecutando: ${command}`);
         outputChannel.appendLine(`Archivo: ${filePath}`);
@@ -84,6 +84,25 @@ function getPythonCommand() {
     }
 
     return 'python';
+}
+
+/**
+ * Indica si se debe mostrar automáticamente el canal de salida al ejecutar comandos
+ * @returns {boolean}
+ */
+function shouldAutoShowOutput() {
+    const config = vscode.workspace.getConfiguration('py2rocket');
+    return config.get('autoShowOutput', false);
+}
+
+/**
+ * Muestra el canal de salida solo si está habilitado por configuración
+ * @param {vscode.OutputChannel} outputChannel
+ */
+function maybeShowOutput(outputChannel) {
+    if (shouldAutoShowOutput()) {
+        outputChannel.show(true);
+    }
 }
 
 /**
@@ -296,7 +315,7 @@ async function downloadCommand(outputChannel) {
         const pythonCommand = getPythonCommand();
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-        outputChannel.show(true);
+        maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Descargando workflow: ${workflowId}`);
         outputChannel.appendLine(`Archivo: ${fileName}`);
@@ -466,7 +485,7 @@ async function renderCommand(outputChannel, context) {
     const fileDir = path.dirname(filePath);
 
     return new Promise((resolve, reject) => {
-        outputChannel.show(true);
+        maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Renderizando grafo: ${fileName}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
@@ -1647,7 +1666,7 @@ async function getHistoryCommand(outputChannel, context) {
             return;
         }
 
-        outputChannel.show(true);
+        maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Obteniendo historial: ${workflowId}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
@@ -1733,7 +1752,7 @@ async function requestExecutionCommand(outputChannel, context) {
             return;
         }
 
-        outputChannel.show(true);
+        maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Obteniendo parámetros de ejecución: ${workflowId}`);
         outputChannel.appendLine(`${'='.repeat(60)}\n`);
@@ -1849,7 +1868,7 @@ async function refreshFolderCommand(folderUri, outputChannel) {
 
         if (confirm !== 'Actualizar') return;
 
-        outputChannel.show(true);
+        maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Actualizando carpeta: ${folderDisplayName}`);
         outputChannel.appendLine(`Ruta relativa: ${relativePath}`);
