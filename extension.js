@@ -106,6 +106,35 @@ function maybeShowOutput(outputChannel) {
 }
 
 /**
+ * Ejecuta una tarea mostrando una ventana de progreso con animación
+ * @param {string} title
+ * @param {(progress: vscode.Progress<{ message?: string; increment?: number }>) => Promise<void> | void} task
+ * @returns {Thenable<void>}
+ */
+function runWithProgress(title, task) {
+    return vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title,
+            cancellable: false
+        },
+        async (progress) => {
+            await Promise.resolve(task(progress));
+        }
+    );
+}
+
+/**
+ * Reporta mensaje de avance en la notificación de progreso
+ * @param {vscode.Progress<{ message?: string; increment?: number }>} progress
+ * @param {string} message
+ */
+function reportProgress(progress, message) {
+    if (!progress || !message) return;
+    progress.report({ message });
+}
+
+/**
  * Busca un ejecutable de Python en .venv del workspace
  * @returns {string|null}
  */
@@ -266,11 +295,13 @@ function resolveLocalGroupDir(workspaceFolder, baseGroupName, fullGroupName) {
  * Comando: Build
  * Compila el archivo Python actual a JSON usando py2rocket build
  */
-async function buildCommand(outputChannel) {
+async function buildCommand(outputChannel, progress) {
+    reportProgress(progress, 'Validando archivo activo...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
     // Guardar el archivo antes de compilar
+    reportProgress(progress, 'Guardando cambios del archivo...');
     await vscode.window.activeTextEditor.document.save();
 
     const fileName = path.basename(filePath);
@@ -279,11 +310,13 @@ async function buildCommand(outputChannel) {
 
     try {
         // Ejecutar desde el directorio del archivo
+        reportProgress(progress, 'Compilando Python a JSON...');
         await executePy2RocketCommand(command, filePath, outputChannel, path.dirname(filePath));
 
         // Intentar abrir el archivo JSON generado
         const jsonPath = filePath.replace('.py', '.json');
         if (fs.existsSync(jsonPath)) {
+            reportProgress(progress, 'Abriendo JSON generado...');
             const doc = await vscode.workspace.openTextDocument(jsonPath);
             await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
         }
@@ -296,7 +329,8 @@ async function buildCommand(outputChannel) {
  * Comando: Download
  * Descarga el workflow desde el servidor y lo convierte a Python
  */
-async function downloadCommand(outputChannel) {
+async function downloadCommand(outputChannel, progress) {
+    reportProgress(progress, 'Validando archivo y workflow...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
@@ -339,6 +373,7 @@ async function downloadCommand(outputChannel) {
 
         try {
             // Paso 1: Descargar el workflow
+            reportProgress(progress, 'Paso 1/3: Descargando workflow...');
             outputChannel.appendLine('Paso 1/3: Descargando del servidor...');
             const downloadCmd = `${pythonCommand} -m py2rocket download "${workflowId}"`;
             const downloadOutput = execSync(downloadCmd, {
@@ -348,6 +383,7 @@ async function downloadCommand(outputChannel) {
             outputChannel.appendLine(downloadOutput);
 
             // Paso 2: Detectar el archivo JSON descargado
+            reportProgress(progress, 'Paso 2/3: Detectando archivo descargado...');
             const jsonFiles = fs.readdirSync(fileDir).filter(f =>
                 f.endsWith('.json')
             );
@@ -368,6 +404,7 @@ async function downloadCommand(outputChannel) {
             outputChannel.appendLine(`\nPaso 2/3: Convirtiendo JSON a Python...`);
 
             // Paso 3: Convertir JSON a Python usando from-json
+            reportProgress(progress, 'Paso 2/3: Convirtiendo JSON a Python...');
             const fromJsonCmd = `${pythonCommand} -m py2rocket from-json "${downloadedJsonFile}" -o "${fileName}"`;
             const fromJsonOutput = execSync(fromJsonCmd, {
                 ...execOptions,
@@ -376,6 +413,7 @@ async function downloadCommand(outputChannel) {
             outputChannel.appendLine(fromJsonOutput);
 
             // Paso 4: Eliminar el archivo JSON descargado
+            reportProgress(progress, 'Paso 3/3: Limpiando archivos temporales...');
             outputChannel.appendLine(`\nPaso 3/3: Limpiando archivos temporales...`);
             const jsonPath = path.join(fileDir, downloadedJsonFile);
             fs.unlinkSync(jsonPath);
@@ -405,11 +443,13 @@ async function downloadCommand(outputChannel) {
  * Comando: Build and Push
  * Compila el archivo Python y lo despliega a Rocket
  */
-async function buildAndPushCommand(outputChannel) {
+async function buildAndPushCommand(outputChannel, progress) {
+    reportProgress(progress, 'Validando archivo activo...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
     // Guardar el archivo antes de compilar
+    reportProgress(progress, 'Guardando cambios del archivo...');
     await vscode.window.activeTextEditor.document.save();
 
     const fileName = path.basename(filePath);
@@ -420,11 +460,13 @@ async function buildAndPushCommand(outputChannel) {
 
     try {
         // Paso 1: Build
+        reportProgress(progress, 'Paso 1/2: Compilando workflow...');
         outputChannel.appendLine('Paso 1/2: Building...');
         const buildCommand = `${pythonCommand} -m py2rocket build "${fileName}"`;
         await executePy2RocketCommand(buildCommand, filePath, outputChannel, fileDir);
 
         // Paso 2: Push
+        reportProgress(progress, 'Paso 2/2: Publicando en Rocket...');
         outputChannel.appendLine('\nPaso 2/2: Pushing to Rocket...');
         const pushCommand = `${pythonCommand} -m py2rocket push "${jsonFileName}"`;
         await executePy2RocketCommand(pushCommand, filePath, outputChannel, fileDir);
@@ -439,11 +481,13 @@ async function buildAndPushCommand(outputChannel) {
  * Comando: Build and Push Silent
  * Compila y despliega sin abrir el archivo JSON
  */
-async function buildAndPushSilentCommand(outputChannel) {
+async function buildAndPushSilentCommand(outputChannel, progress) {
+    reportProgress(progress, 'Validando archivo activo...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
     // Guardar el archivo antes de compilar
+    reportProgress(progress, 'Guardando cambios del archivo...');
     await vscode.window.activeTextEditor.document.save();
 
     const fileName = path.basename(filePath);
@@ -454,11 +498,13 @@ async function buildAndPushSilentCommand(outputChannel) {
 
     try {
         // Paso 1: Build
+        reportProgress(progress, 'Paso 1/2: Compilando workflow...');
         outputChannel.appendLine('Paso 1/2: Building...');
         const buildCommand = `${pythonCommand} -m py2rocket build "${fileName}"`;
         await executePy2RocketCommand(buildCommand, filePath, outputChannel, fileDir);
 
         // Paso 2: Push
+        reportProgress(progress, 'Paso 2/2: Publicando en Rocket...');
         outputChannel.appendLine('\nPaso 2/2: Pushing to Rocket...');
         const pushCommand = `${pythonCommand} -m py2rocket push "${jsonFileName}"`;
         await executePy2RocketCommand(pushCommand, filePath, outputChannel, fileDir);
@@ -473,11 +519,13 @@ async function buildAndPushSilentCommand(outputChannel) {
  * Comando: Render
  * Renderiza el grafo del workflow usando py2rocket render
  */
-async function renderCommand(outputChannel, context) {
+async function renderCommand(outputChannel, context, progress) {
+    reportProgress(progress, 'Validando archivo activo...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
     // Guardar el archivo antes de renderizar
+    reportProgress(progress, 'Guardando cambios del archivo...');
     await vscode.window.activeTextEditor.document.save();
 
     const fileName = path.basename(filePath);
@@ -485,6 +533,7 @@ async function renderCommand(outputChannel, context) {
     const fileDir = path.dirname(filePath);
 
     return new Promise((resolve, reject) => {
+        reportProgress(progress, 'Renderizando grafo del workflow...');
         maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Renderizando grafo: ${fileName}`);
@@ -537,6 +586,7 @@ async function renderCommand(outputChannel, context) {
                     }
 
                     if (graphData) {
+                        reportProgress(progress, 'Abriendo vista de grafo...');
                         outputChannel.appendLine(`\n✓ Grafo obtenido exitosamente`);
                         createGraphWebView(graphData, context, fileName);
                         resolve();
@@ -731,7 +781,8 @@ function shellQuote(value) {
     return `"${safe}"`;
 }
 
-async function executeWorkflowFromWebView(data, workflowId, filePath, outputChannel) {
+async function executeWorkflowFromWebView(data, workflowId, filePath, outputChannel, progress) {
+    reportProgress(progress, 'Preparando parámetros de ejecución...');
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceFolder) {
         vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
@@ -761,6 +812,7 @@ async function executeWorkflowFromWebView(data, workflowId, filePath, outputChan
         } else if (absoluteInputPath.endsWith('.py')) {
             const absoluteJsonPath = absoluteInputPath.replace(/\.py$/i, '.json');
             if (!fs.existsSync(absoluteJsonPath)) {
+                reportProgress(progress, 'Compilando archivo Python para ejecución...');
                 outputChannel.appendLine(`[⚙️] No se encontró JSON compilado. Generando: ${path.basename(absoluteJsonPath)}`);
                 const buildCommand = `${pythonCommand} -m py2rocket build ${shellQuote(path.basename(absoluteInputPath))}`;
                 await executePy2RocketCommand(buildCommand, absoluteInputPath, outputChannel, path.dirname(absoluteInputPath));
@@ -804,8 +856,10 @@ async function executeWorkflowFromWebView(data, workflowId, filePath, outputChan
         }
 
         const command = commandParts.join(' ');
+        reportProgress(progress, 'Enviando solicitud de ejecución a Rocket...');
         await executePy2RocketCommand(command, filePath, outputChannel, commandWorkingDir);
     } finally {
+        reportProgress(progress, 'Limpiando archivos temporales...');
         try { fs.unlinkSync(paramsListsFile); } catch { }
         try { fs.unlinkSync(extraParamsFile); } catch { }
     }
@@ -1260,7 +1314,15 @@ function createExecutionWebView(workflowId, context, executionConfig = {}) {
         async message => {
             if (message.command === 'executeWorkflow') {
                 try {
-                    await executeWorkflowFromWebView(message.data, workflowId, executionConfig.filePath, executionConfig.outputChannel);
+                    await runWithProgress('Py2Rocket: Ejecutando workflow...', async (progress) => {
+                        await executeWorkflowFromWebView(
+                            message.data,
+                            workflowId,
+                            executionConfig.filePath,
+                            executionConfig.outputChannel,
+                            progress
+                        );
+                    });
                     panel.dispose();
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error al ejecutar workflow: ${error.message}`);
@@ -1652,7 +1714,8 @@ function createHistoryWebView(historyData, context, workflowId) {
  * Comando: Get History
  * Obtiene el historial de ejecuciones del workflow abierto
  */
-async function getHistoryCommand(outputChannel, context) {
+async function getHistoryCommand(outputChannel, context, progress) {
+    reportProgress(progress, 'Validando archivo y workflow...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
@@ -1673,6 +1736,7 @@ async function getHistoryCommand(outputChannel, context) {
 
         const pythonCommand = getPythonCommand();
         const command = `${pythonCommand} -m py2rocket get-history "${workflowId}" -j`;
+        reportProgress(progress, 'Consultando historial en Rocket...');
 
         // Ejecutar comando sin mostrar mensaje de éxito
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -1714,6 +1778,7 @@ async function getHistoryCommand(outputChannel, context) {
                 }
 
                 if (historyData && historyData.status === 'success') {
+                    reportProgress(progress, 'Abriendo vista de historial...');
                     outputChannel.appendLine(`\n✓ Historial obtenido exitosamente`);
                     outputChannel.appendLine(`  Total de ejecuciones: ${historyData.total_count}`);
                     createHistoryWebView(historyData, context, workflowId);
@@ -1738,7 +1803,8 @@ async function getHistoryCommand(outputChannel, context) {
  * Abre un formulario para solicitar la ejecución de un workflow
  * Obtiene los parámetros reales del paquete/módulo
  */
-async function requestExecutionCommand(outputChannel, context) {
+async function requestExecutionCommand(outputChannel, context, progress) {
+    reportProgress(progress, 'Validando archivo y workflow...');
     const filePath = getActiveFilePath();
     if (!filePath) return;
 
@@ -1761,6 +1827,7 @@ async function requestExecutionCommand(outputChannel, context) {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const command = `${pythonCommand} -m py2rocket run-view-parameters "${workflowId}" -j`;
         const commandWorkingDir = resolvePy2RocketWorkingDir(filePath);
+        reportProgress(progress, 'Obteniendo parámetros del workflow...');
 
         const execOptions = {
             cwd: commandWorkingDir,
@@ -1798,6 +1865,7 @@ async function requestExecutionCommand(outputChannel, context) {
                     outputChannel
                 };
 
+                reportProgress(progress, 'Abriendo formulario de ejecución...');
                 outputChannel.appendLine('✓ Parámetros obtenidos exitosamente (etapa 1)');
                 createExecutionWebView(workflowId, context, executionConfig);
                 resolve();
@@ -1823,7 +1891,8 @@ async function requestExecutionCommand(outputChannel, context) {
  * Lee la configuración de .py2rocket de la raíz del workspace
  * @param {vscode.Uri} folderUri - URI de la carpeta seleccionada en el explorador
  */
-async function refreshFolderCommand(folderUri, outputChannel) {
+async function refreshFolderCommand(folderUri, outputChannel, progress) {
+    reportProgress(progress, 'Validando carpeta seleccionada...');
     if (!folderUri || !folderUri.fsPath) {
         vscode.window.showErrorMessage('No se especificó una carpeta para actualizar');
         return;
@@ -1868,6 +1937,7 @@ async function refreshFolderCommand(folderUri, outputChannel) {
 
         if (confirm !== 'Actualizar') return;
 
+        reportProgress(progress, 'Limpiando contenido local de la carpeta...');
         maybeShowOutput(outputChannel);
         outputChannel.appendLine(`\n${'='.repeat(60)}`);
         outputChannel.appendLine(`Actualizando carpeta: ${folderDisplayName}`);
@@ -1930,6 +2000,7 @@ async function refreshFolderCommand(folderUri, outputChannel) {
         const pythonCommand = getPythonCommand();
         const syncCommand = `${pythonCommand} -m py2rocket sync "${fullGroupPath}" --output "."`;
 
+        reportProgress(progress, 'Sincronizando assets desde Rocket...');
         await executePy2RocketCommand(syncCommand, selectedFolder, outputChannel, selectedFolder);
 
         // Si py2rocket creó una subcarpeta con el nombre del grupo, mover su contenido hacia arriba
@@ -1937,6 +2008,7 @@ async function refreshFolderCommand(folderUri, outputChannel) {
         const createdSubfolder = path.join(selectedFolder, lastGroupPart);
         if (lastGroupPart && fs.existsSync(createdSubfolder) && createdSubfolder !== selectedFolder) {
             try {
+                reportProgress(progress, 'Reorganizando estructura de carpetas...');
                 const subfolderFiles = fs.readdirSync(createdSubfolder);
                 for (const file of subfolderFiles) {
                     const fromPath = path.join(createdSubfolder, file);
@@ -1962,7 +2034,8 @@ async function refreshFolderCommand(folderUri, outputChannel) {
  * Comando: Create Group
  * Crea un grupo en Rocket y la carpeta local correspondiente
  */
-async function createGroupCommand(folderUri, outputChannel) {
+async function createGroupCommand(folderUri, outputChannel, progress) {
+    reportProgress(progress, 'Validando estado del workspace...');
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceFolder) {
         vscode.window.showErrorMessage('No hay una carpeta de trabajo abierta');
@@ -2052,7 +2125,9 @@ async function createGroupCommand(folderUri, outputChannel) {
     const createCommand = `${pythonCommand} -m py2rocket create-group "${fullGroupName}" --project-name "${projectName}"`;
 
     try {
+        reportProgress(progress, 'Creando grupo en Rocket...');
         await executePy2RocketCommand(createCommand, path.join(workspaceFolder, '.py2rocket'), outputChannel, workspaceFolder);
+        reportProgress(progress, 'Creando carpeta local del grupo...');
         fs.mkdirSync(localGroupDir, { recursive: true });
         vscode.window.showInformationMessage(`✓ Carpeta creada: ${localGroupDir}`);
     } catch (error) {
@@ -2313,48 +2388,66 @@ function activate(context) {
     }
 
     // Registrar comando: Build
-    const buildDisposable = vscode.commands.registerCommand('py2rocket.build', () => {
-        buildCommand(outputChannel);
+    const buildDisposable = vscode.commands.registerCommand('py2rocket.build', async () => {
+        await runWithProgress('Py2Rocket: Ejecutando Build...', async (progress) => {
+            await buildCommand(outputChannel, progress);
+        });
     });
 
     // Registrar comando: Pull
-    const downloadDisposable = vscode.commands.registerCommand('py2rocket.download', () => {
-        downloadCommand(outputChannel);
+    const downloadDisposable = vscode.commands.registerCommand('py2rocket.download', async () => {
+        await runWithProgress('Py2Rocket: Ejecutando Download...', async (progress) => {
+            await downloadCommand(outputChannel, progress);
+        });
     });
 
     // Registrar comando: Build and Push
-    const buildAndPushDisposable = vscode.commands.registerCommand('py2rocket.buildAndPush', () => {
-        buildAndPushCommand(outputChannel);
+    const buildAndPushDisposable = vscode.commands.registerCommand('py2rocket.buildAndPush', async () => {
+        await runWithProgress('Py2Rocket: Ejecutando Build and Push...', async (progress) => {
+            await buildAndPushCommand(outputChannel, progress);
+        });
     });
 
     // Registrar comando: Push (Build and Push Silent)
-    const pushDisposable = vscode.commands.registerCommand('py2rocket.push', () => {
-        buildAndPushSilentCommand(outputChannel);
+    const pushDisposable = vscode.commands.registerCommand('py2rocket.push', async () => {
+        await runWithProgress('Py2Rocket: Ejecutando Push...', async (progress) => {
+            await buildAndPushSilentCommand(outputChannel, progress);
+        });
     });
 
     // Registrar comando: Render
-    const renderDisposable = vscode.commands.registerCommand('py2rocket.render', () => {
-        renderCommand(outputChannel, context);
+    const renderDisposable = vscode.commands.registerCommand('py2rocket.render', async () => {
+        await runWithProgress('Py2Rocket: Renderizando grafo...', async (progress) => {
+            await renderCommand(outputChannel, context, progress);
+        });
     });
 
     // Registrar comando: Get History
-    const getHistoryDisposable = vscode.commands.registerCommand('py2rocket.getHistory', () => {
-        getHistoryCommand(outputChannel, context);
+    const getHistoryDisposable = vscode.commands.registerCommand('py2rocket.getHistory', async () => {
+        await runWithProgress('Py2Rocket: Obteniendo historial...', async (progress) => {
+            await getHistoryCommand(outputChannel, context, progress);
+        });
     });
 
     // Registrar comando: Request Execution
-    const requestExecutionDisposable = vscode.commands.registerCommand('py2rocket.requestExecution', () => {
-        requestExecutionCommand(outputChannel, context);
+    const requestExecutionDisposable = vscode.commands.registerCommand('py2rocket.requestExecution', async () => {
+        await runWithProgress('Py2Rocket: Solicitando ejecución...', async (progress) => {
+            await requestExecutionCommand(outputChannel, context, progress);
+        });
     });
 
     // Registrar comando: Refresh Folder
-    const refreshFolderDisposable = vscode.commands.registerCommand('py2rocket.refreshFolder', (folderUri) => {
-        refreshFolderCommand(folderUri, outputChannel);
+    const refreshFolderDisposable = vscode.commands.registerCommand('py2rocket.refreshFolder', async (folderUri) => {
+        await runWithProgress('Py2Rocket: Refrescando carpeta...', async (progress) => {
+            await refreshFolderCommand(folderUri, outputChannel, progress);
+        });
     });
 
     // Registrar comando: Create Group
-    const createGroupDisposable = vscode.commands.registerCommand('py2rocket.createGroup', (folderUri) => {
-        createGroupCommand(folderUri, outputChannel);
+    const createGroupDisposable = vscode.commands.registerCommand('py2rocket.createGroup', async (folderUri) => {
+        await runWithProgress('Py2Rocket: Creando grupo...', async (progress) => {
+            await createGroupCommand(folderUri, outputChannel, progress);
+        });
     });
 
     context.subscriptions.push(buildDisposable);
