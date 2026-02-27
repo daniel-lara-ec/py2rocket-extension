@@ -2,7 +2,7 @@
   "name": "py2rocket-extension",
   "displayName": "Py2Rocket Extension",
   "description": "Extensión para compilar y desplegar workflows de Py2Rocket",
-  "version": "0.24.2",
+  "version": "0.24.3",
   "author": "Matias Lara",
   "publisher": "matiaslara",
   "engines": {

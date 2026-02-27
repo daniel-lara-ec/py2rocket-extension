@@ -2178,16 +2178,22 @@ function getGraphHtml(graphData, fileName) {
     };
 
     // Transformar nodos para vis-network
-    const visNodes = nodes.map(node => ({
-        id: node.id,
-        label: node.id,
-        color: nodeColors[node.type] || nodeColors.default,
-        shape: node.type === 'reader' ? 'box' :
-            node.type === 'writer' ? 'box' :
-                'ellipse',
-        font: { color: '#ffffff', size: 14, bold: true },
-        title: `Tipo: ${node.type}`
-    }));
+    const visNodes = nodes.map(node => {
+        const hasPriority = node.priority !== undefined && node.priority !== null;
+        const priorityLabel = hasPriority ? `\nPrioridad: ${node.priority}` : '';
+        const priorityTitle = hasPriority ? `\nPrioridad: ${node.priority}` : '';
+
+        return {
+            id: node.id,
+            label: `${node.id}${priorityLabel}`,
+            color: nodeColors[node.type] || nodeColors.default,
+            shape: node.type === 'reader' ? 'box' :
+                node.type === 'writer' ? 'box' :
+                    'ellipse',
+            font: { color: '#ffffff', size: 14, bold: true },
+            title: `Tipo: ${node.type}${priorityTitle}`
+        };
+    });
 
     // Transformar edges para vis-network
     const visEdges = edges.map((edge, index) => ({
