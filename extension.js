@@ -410,6 +410,12 @@ async function downloadCommand(outputChannel, progress) {
         const { execSync } = require('child_process');
 
         try {
+            const downloadStartedAt = Date.now();
+            const beforeJsonSet = new Set(
+                fs.readdirSync(fileDir)
+                    .filter(f => f.endsWith('.json'))
+            );
+
             // Paso 1: Descargar el workflow
             reportProgress(progress, 'Paso 1/3: Descargando workflow...');
             outputChannel.appendLine('Paso 1/3: Descargando del servidor...');
@@ -430,20 +436,31 @@ async function downloadCommand(outputChannel, progress) {
                 throw new Error('No se encontró ningún archivo JSON descargado. Verifica que el download se completó sin errores.');
             }
 
-            // Si hay múltiples JSON, tomar el más reciente (el que acaba de descargarse)
-            let downloadedJsonFile = jsonFiles[0];
-            if (jsonFiles.length > 1) {
-                const fileStats = jsonFiles.map(f => ({
-                    file: f,
-                    time: fs.statSync(path.join(fileDir, f)).mtime.getTime()
-                }));
-                downloadedJsonFile = fileStats.sort((a, b) => b.time - a.time)[0].file;
+            // Seleccionar JSON recién creado/modificado por este download
+            const candidateStats = jsonFiles.map(f => ({
+                file: f,
+                fullPath: path.join(fileDir, f),
+                time: fs.statSync(path.join(fileDir, f)).mtime.getTime(),
+                isNew: !beforeJsonSet.has(f)
+            }));
+
+            let picked = candidateStats
+                .filter(item => item.isNew || item.time >= downloadStartedAt - 2000)
+                .sort((a, b) => b.time - a.time)[0];
+
+            if (!picked) {
+                picked = candidateStats.sort((a, b) => b.time - a.time)[0];
             }
+
+            const downloadedJsonFile = picked.file;
+            const downloadedJsonPath = picked.fullPath;
+            outputChannel.appendLine(`Archivo JSON detectado: ${downloadedJsonPath}`);
             outputChannel.appendLine(`\nPaso 2/3: Convirtiendo JSON a Python...`);
 
             // Paso 3: Convertir JSON a Python usando from-json
             reportProgress(progress, 'Paso 2/3: Convirtiendo JSON a Python...');
-            const fromJsonCmd = `${pythonCommand} -m py2rocket from-json "${downloadedJsonFile}" -o "${fileName}"`;
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            const fromJsonCmd = `${pythonCommand} -m py2rocket from-json "${downloadedJsonPath}" -o "${filePath}"`;
             const fromJsonOutput = execSync(fromJsonCmd, {
                 ...execOptions,
                 encoding: 'utf-8'
@@ -453,9 +470,12 @@ async function downloadCommand(outputChannel, progress) {
             // Paso 4: Eliminar el archivo JSON descargado
             reportProgress(progress, 'Paso 3/3: Limpiando archivos temporales...');
             outputChannel.appendLine(`\nPaso 3/3: Limpiando archivos temporales...`);
-            const jsonPath = path.join(fileDir, downloadedJsonFile);
-            fs.unlinkSync(jsonPath);
-            outputChannel.appendLine(`✓ Archivo JSON eliminado: ${downloadedJsonFile}`);
+            try {
+                fs.unlinkSync(downloadedJsonPath);
+                outputChannel.appendLine(`✓ Archivo JSON eliminado: ${downloadedJsonFile}`);
+            } catch (cleanupError) {
+                outputChannel.appendLine(`⚠️  No se pudo eliminar temporal: ${downloadedJsonFile} (${cleanupError.message})`);
+            }
 
             outputChannel.appendLine(`\n${'='.repeat(60)}`);
             outputChannel.appendLine(`✓ Workflow descargado y convertido exitosamente`);
