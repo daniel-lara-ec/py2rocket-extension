@@ -149,6 +149,18 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "py2rocket.render",
+        "key": "f7",
+        "when": "editorTextFocus && resourceLangId == python"
+      },
+      {
+        "command": "py2rocket.buildAndPush",
+        "key": "f8",
+        "when": "editorTextFocus && resourceLangId == python"
+      }
+    ],
     "configuration": {
       "title": "Py2Rocket",
       "properties": {
