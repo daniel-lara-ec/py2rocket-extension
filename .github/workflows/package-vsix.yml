@@ -5,14 +5,7 @@ on:
     branches:
       - main
       - master
-    tags:
-      - "v*"
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Release tag (e.g., v0.0.1)"
-        required: true
-        type: string
 
 jobs:
   package:
@@ -34,7 +27,19 @@ jobs:
 
       - name: Get version
         id: version
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "VERSION=$(node -p 'require("./package.json").version')" >> $GITHUB_OUTPUT
+
+      - name: Check if release tag exists
+        id: release_check
+        run: |
+          TAG="v${{ steps.version.outputs.VERSION }}"
+          git fetch --tags --force
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "EXISTS=true" >> $GITHUB_OUTPUT
+            echo "Release $TAG ya existe. Se omitirá creación de release."
+          else
+            echo "EXISTS=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Package extension
         run: |
@@ -49,8 +54,10 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: steps.release_check.outputs.EXISTS == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Release v${{ steps.version.outputs.VERSION }}
+          generate_release_notes: true
           files: "dist/py2rocket-extension-*.vsix"

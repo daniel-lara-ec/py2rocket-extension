@@ -3,6 +3,8 @@ const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+let currentGraphPanel;
+
 /**
  * Ejecuta un comando de py2rocket
  * @param {string} command - El comando a ejecutar
@@ -47,15 +49,10 @@ function executePy2RocketCommand(command, filePath, outputChannel, workingDir = 
 
         // Ejecutar el comando en el directorio especificado
         exec(command, execOptions, (error, stdout, stderr) => {
-            if (stdout) {
-                outputChannel.appendLine(stdout);
-            }
-            if (stderr) {
-                outputChannel.appendLine(`STDERR: ${stderr}`);
-            }
+            appendCommandStreams(outputChannel, stdout, stderr);
 
             if (error) {
-                outputChannel.appendLine(`\nError: ${error.message}`);
+                appendExecutionErrorDetails(outputChannel, error);
                 vscode.window.showErrorMessage(`Error ejecutando py2rocket: ${error.message}`);
                 reject(error);
             } else {
@@ -102,6 +99,47 @@ function shouldAutoShowOutput() {
 function maybeShowOutput(outputChannel) {
     if (shouldAutoShowOutput()) {
         outputChannel.show(true);
+    }
+}
+
+/**
+ * Imprime streams de salida del comando en formato legible
+ * @param {vscode.OutputChannel} outputChannel
+ * @param {string} stdout
+ * @param {string} stderr
+ */
+function appendCommandStreams(outputChannel, stdout, stderr) {
+    if (stdout && String(stdout).trim()) {
+        outputChannel.appendLine(`STDOUT:\n${stdout}`);
+    }
+
+    if (stderr && String(stderr).trim()) {
+        outputChannel.appendLine(`STDERR:\n${stderr}`);
+    }
+}
+
+/**
+ * Imprime detalles del error de ejecución (incluye traceback cuando existe)
+ * @param {vscode.OutputChannel} outputChannel
+ * @param {Error & {code?: string|number, signal?: string, cmd?: string}} error
+ */
+function appendExecutionErrorDetails(outputChannel, error) {
+    outputChannel.appendLine(`\n❌ Error: ${error?.message || 'Error ejecutando comando'}`);
+
+    if (typeof error?.code !== 'undefined') {
+        outputChannel.appendLine(`Código de salida: ${error.code}`);
+    }
+
+    if (error?.signal) {
+        outputChannel.appendLine(`Signal: ${error.signal}`);
+    }
+
+    if (error?.cmd) {
+        outputChannel.appendLine(`Comando: ${error.cmd}`);
+    }
+
+    if (error?.stack && String(error.stack).trim()) {
+        outputChannel.appendLine(`Stack:\n${error.stack}`);
     }
 }
 
@@ -430,7 +468,11 @@ async function downloadCommand(outputChannel, progress) {
             await vscode.commands.executeCommand('workbench.action.files.revert');
 
         } catch (error) {
-            outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+            const formatted = formatExecError(error);
+            outputChannel.appendLine(`\n❌ Error:\n${formatted.message}`);
+            if (error?.stack) {
+                outputChannel.appendLine(`Stack:\n${error.stack}`);
+            }
             vscode.window.showErrorMessage(`Error al descargar workflow: ${error.message}`);
         }
     } catch (error) {
@@ -557,15 +599,15 @@ async function renderCommand(outputChannel, context, progress) {
         }
 
         exec(command, execOptions, (error, stdout, stderr) => {
-            if (stdout) {
-                outputChannel.appendLine(stdout);
+            if (stdout && String(stdout).trim()) {
+                outputChannel.appendLine(`STDOUT:\n${stdout}`);
             }
-            if (stderr && !stderr.includes('DeprecationWarning')) {
-                outputChannel.appendLine(`STDERR: ${stderr}`);
+            if (stderr && String(stderr).trim() && !stderr.includes('DeprecationWarning')) {
+                outputChannel.appendLine(`STDERR:\n${stderr}`);
             }
 
             if (error) {
-                outputChannel.appendLine(`\nError: ${error.message}`);
+                appendExecutionErrorDetails(outputChannel, error);
                 vscode.window.showErrorMessage(`Error renderizando grafo: ${error.message}`);
                 reject(error);
             } else {
@@ -595,6 +637,9 @@ async function renderCommand(outputChannel, context, progress) {
                     }
                 } catch (parseError) {
                     outputChannel.appendLine(`\nError parseando JSON: ${parseError.message}`);
+                    if (parseError?.stack) {
+                        outputChannel.appendLine(`Stack:\n${parseError.stack}`);
+                    }
                     vscode.window.showErrorMessage(`Error parseando datos del grafo: ${parseError.message}`);
                     reject(parseError);
                 }
@@ -1787,7 +1832,11 @@ async function getHistoryCommand(outputChannel, context, progress) {
                     throw new Error('Respuesta inválida del comando get-history');
                 }
             } catch (error) {
-                outputChannel.appendLine(`\n❌ Error: ${error.message}`);
+                const formatted = formatExecError(error);
+                outputChannel.appendLine(`\n❌ Error:\n${formatted.message}`);
+                if (error?.stack) {
+                    outputChannel.appendLine(`Stack:\n${error.stack}`);
+                }
                 vscode.window.showErrorMessage(`Error al obtener historial: ${error.message}`);
                 reject(error);
             }
@@ -2142,15 +2191,30 @@ async function createGroupCommand(folderUri, outputChannel, progress) {
  * @param {string} fileName - Nombre del archivo
  */
 function createGraphWebView(graphData, context, fileName) {
+    let targetColumn = vscode.ViewColumn.Beside;
+
+    if (currentGraphPanel) {
+        targetColumn = currentGraphPanel.viewColumn || vscode.ViewColumn.Beside;
+        currentGraphPanel.dispose();
+        currentGraphPanel = undefined;
+    }
+
     const panel = vscode.window.createWebviewPanel(
         'py2rocketGraph',
         `Grafo: ${fileName}`,
-        vscode.ViewColumn.Beside,
+        targetColumn,
         {
             enableScripts: true,
             retainContextWhenHidden: true
         }
     );
+
+    currentGraphPanel = panel;
+    panel.onDidDispose(() => {
+        if (currentGraphPanel === panel) {
+            currentGraphPanel = undefined;
+        }
+    }, null, context.subscriptions);
 
     panel.webview.html = getGraphHtml(graphData, fileName);
 }
@@ -2475,6 +2539,10 @@ function activate(context) {
  * Desactivación de la extensión
  */
 function deactivate() {
+    if (currentGraphPanel) {
+        currentGraphPanel.dispose();
+        currentGraphPanel = undefined;
+    }
     console.log('Desactivando extensión py2rocket-extension');
 }
 
